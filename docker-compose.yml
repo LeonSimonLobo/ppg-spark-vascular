@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  spark-master:
+    image: bitnami/spark:3.5
+    container_name: ppg-spark-master
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    ports:
+      - "8080:8080" # Spark Master Web UI
+      - "7077:7077" # Spark Master port
+    volumes:
+      - ./:/opt/bitnami/spark/work
+    working_dir: /opt/bitnami/spark/work
+
+  spark-worker:
+    image: bitnami/spark:3.5
+    container_name: ppg-spark-worker
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    depends_on:
+      - spark-master
+    volumes:
+      - ./:/opt/bitnami/spark/work
+    working_dir: /opt/bitnami/spark/work
+
+  jupyter:
+    image: jupyter/pyspark-notebook:latest
+    container_name: ppg-spark-jupyter
+    ports:
+      - "8888:8888" # Jupyter Lab UI
+      - "4040:4040" # Spark Driver UI
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - SPARK_MASTER=spark://spark-master:7077
+    volumes:
+      - ./:/home/jovyan/work
+    working_dir: /home/jovyan/work
+    command: start-notebook.sh --ServerApp.token='' --ServerApp.password=''

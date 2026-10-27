@@ -1,0 +1,37 @@
+# Data and artifacts (excluded as per project requirements)
+data/
+*.mat
+*.parquet
+__pycache__/
+
+# Python
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Spark / Hadoop
+checkpoint/
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Logs & Environment Variables
+*.log
+.env
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
