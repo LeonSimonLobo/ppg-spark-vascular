@@ -23,7 +23,8 @@ Sex coding: 1 = male, 0 = female (ingest.py).
 - All ladder steps, hyperparameters and quality thresholds are chosen on validation only.
 
 ## Fiducials (Option A, frozen before any detector runs)
-- Systolic peaks and turning points: Elgendi et al. (2013) two-moving-average method, applied to Signals channel 1 as stored.
+- Systolic peaks and turning points: Elgendi et al. (2013) two-moving-average method, applied to Signals channel 1 as stored, with no additional filtering.
+- Frozen Elgendi parameters: systolic peak window W1 = 111 ms; beat window W2 = 667 ms; offset beta = 0.02 (Elgendi et al., 2013 defaults).
 - Foot: the PPG minimum in the 300 ms before each systolic peak.
 - ABP reference (validation only, never a feature): ABP peaks and feet from channel 2. The ABP filter is undocumented; this is stated as a limitation.
 - PTT offset per segment: the lag from 0 to 60 samples that maximizes PPG-ABP cross-correlation, as in ingest.py.
