@@ -82,6 +82,7 @@ Before any feature extraction or evaluation on held-out test subjects, the withi
    - Positive logistic regression coefficient ($\beta_{HR} > 0$) for predicting $SBP \ge 130$ mmHg.
    - Classification AUROC $> 0.50$.
 3. **Gate Decision Rule:** If either criterion fails on training-split subjects, execution stops immediately, and no morphology models or test evaluations are run.
+4. **Segment Inclusion Policy:** All segments included; the gate is a cohort-level check, not a per-segment filter. All 372,240 training-split segments (and all 57,600 CalFree test segments) are retained in the modeling dataset for Steps W0 through W2. Segment quality filtering is tested strictly at Step W3 (signal quality filter) per the pre-registered model ladder.
 
 ---
 
