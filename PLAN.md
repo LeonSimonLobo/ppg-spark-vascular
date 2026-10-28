@@ -54,8 +54,10 @@ Sex coding: 1 = male, 0 = female (ingest.py).
 ## Detector failure rule
 If fewer than 80% of validation segments pass the agreement check, Step 1 and all later morphology steps are reported as blocked, no morphology gain is claimed, and Steps 0a and 0 are still reported. No alternative detector may be tried after seeing agreement results.
 
-## Test-set policy
-The test set is scored once, in a single run after all validation work is complete, for every step that is valid under the final detector outcome. Steps 0a and 0 are always scored. Morphology steps are scored only if the revised detector passes the rule. The test set is spent after that run and cannot be reused for any later detector or model.
+## Test-set policy (Amended under A4: Steps 0a/0 test run cancelled)
+The Steps 0a and 0 test run on CalFree is cancelled and recorded as cancelled. 
+- Reason: Morphology ladder steps are blocked by the detector failure rule (validation agreement of 44.09% under Amendment A3 remained below the 80% threshold). Furthermore, the validation baseline sanity check (results/baseline_sanity.md) revealed that the subject-level demographic signal (age vs. SBP) is absent in validation (Spearman r_s = +0.0145, p = 0.82; subject AUROC = 0.4327) due to intraoperative hemodynamic interventions decoupling operative blood pressure from chronic demographic features. Scoring Steps 0a and 0 alone would exhaust the held-out test set without testing any morphology hypothesis.
+- CalFree Reservation: VitalDB_CalFree_Test_Subset.mat is kept pristine (zero test segments or subjects loaded or scored) and is reserved for the within-subject claim (PLAN_W.md).
 
 ## Metrics
 Headline: AUROC and balanced accuracy, with 95% subject-level bootstrap CIs (2000 resamples over test subjects).
