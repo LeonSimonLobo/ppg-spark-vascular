@@ -152,6 +152,7 @@ def test_synthetic_lag_plus_30():
     assert res["matched_fraction"] >= 0.80
 
 
+@pytest.mark.xfail(strict=True, reason="superseded by A3; see results/ptt_sign_check.md")
 def test_synthetic_lag_minus_30():
     """Verify PTT offset and beat agreement when ABP leads PPG by 30 samples (lag = -30)."""
     fs = 125
@@ -170,6 +171,72 @@ def test_synthetic_lag_minus_30():
     assert max_corr > 0.90, f"Expected high correlation, got {max_corr}"
 
     res = process_segment(ppg, abp, fs=fs)
+    assert res["passes_rule"] is True
+    assert res["matched_fraction"] >= 0.80
+
+
+def test_synthetic_lag_recovery_A3_plus_30():
+    """Verify lag recovery at +30 with the Amendment A3 symmetric window [-W, W)."""
+    fs = 125
+    ppg, ppg_peaks, _ = generate_synthetic_pulse_train(
+        fs=fs, duration_s=10.0, bpm=75.0, noise_std=0.0, seed=42
+    )
+    known_lag = 30
+    abp = np.zeros_like(ppg)
+    abp[known_lag:] = ppg[:-known_lag] * 40.0 + 80.0
+    abp[:known_lag] = np.mean(abp[known_lag:])
+
+    best_lag, max_corr = compute_ptt_offset(ppg, abp, W=37)
+    assert best_lag == known_lag, f"Expected lag {known_lag}, got {best_lag}"
+    assert max_corr > 0.90, f"Expected high correlation, got {max_corr}"
+
+    res = process_segment(ppg, abp, fs=fs, W=37)
+    assert res["passes_rule"] is True
+    assert res["matched_fraction"] >= 0.80
+
+
+def test_synthetic_lag_recovery_A3_minus_30():
+    """Verify lag recovery at -30 with the Amendment A3 symmetric window [-W, W)."""
+    fs = 125
+    base, true_peaks, _ = generate_synthetic_pulse_train(
+        fs=fs, duration_s=10.0, bpm=75.0, noise_std=0.0, seed=42
+    )
+    known_lag = -30
+    abp = base * 40.0 + 80.0
+    ppg = np.zeros_like(base)
+    ppg[30:] = base[:-30]
+    ppg[:30] = np.mean(ppg[30:])
+
+    best_lag, max_corr = compute_ptt_offset(ppg, abp, W=37)
+    assert best_lag == known_lag, f"Expected lag {known_lag}, got {best_lag}"
+    assert max_corr > 0.90, f"Expected high correlation, got {max_corr}"
+
+    res = process_segment(ppg, abp, fs=fs, W=37)
+    assert res["passes_rule"] is True
+    assert res["matched_fraction"] >= 0.80
+
+
+@pytest.mark.parametrize("bpm", [40.0, 75.0, 120.0])
+def test_synthetic_lag_recovery_different_bpm(bpm: float):
+    """Verify lag recovery of -20 samples across heart rates (40, 75, 120 bpm) without aliasing."""
+    fs = 125
+    known_lag = -20
+    base, true_peaks, _ = generate_synthetic_pulse_train(
+        fs=fs, duration_s=10.0, bpm=bpm, noise_std=0.0, seed=42
+    )
+    abp = base * 40.0 + 80.0
+    ppg = np.zeros_like(base)
+    k = -known_lag
+    ppg[k:] = base[:-k]
+    ppg[:k] = np.mean(ppg[k:])
+
+    best_lag, max_corr = compute_ptt_offset(ppg, abp, W=37)
+    assert best_lag == known_lag, (
+        f"At {bpm} bpm, expected recovered lag {known_lag}, got {best_lag} (aliasing check)"
+    )
+    assert max_corr > 0.90, f"At {bpm} bpm, expected high correlation, got {max_corr}"
+
+    res = process_segment(ppg, abp, fs=fs, W=37)
     assert res["passes_rule"] is True
     assert res["matched_fraction"] >= 0.80
 

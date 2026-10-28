@@ -11,7 +11,7 @@ Implements the frozen fiducial detection method specified in PLAN.md:
   A segment passes if at least 80% of beats are matched.
 """
 
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
 import numpy as np
 
 
@@ -163,12 +163,20 @@ def detect_turning_points(
 def compute_ptt_offset(
     ppg: np.ndarray,
     abp: np.ndarray,
-    max_lag: int = 60,
+    max_lag: Optional[int] = None,
+    min_lag: Optional[int] = None,
+    W: Optional[int] = None,
 ) -> Tuple[int, float]:
-    """Compute PTT offset lag (0 to max_lag samples) maximizing cross-correlation.
+    """Compute PTT offset lag maximizing cross-correlation between PPG and ABP.
 
-    Matches the exact correlation method in ingest.py:
-    correlating ppg[:-lag] with abp[lag:] over lag in [0, max_lag).
+    Under Amendment A3, uses a symmetric window [-W, W) with W = 37 samples (~300 ms at 125 Hz).
+    For legacy calls with max_lag=60 and no min_lag/W, preserves the original [0, 60) window.
+
+    Sign Convention:
+    Aligns ABP(t + lag) with PPG(t).
+    - When lag >= 0: correlates ppg[:-lag] with abp[lag:].
+    - When lag < 0: correlates ppg[k:] with abp[:-k], where k = -lag > 0.
+    Physiological pulse arrival (ABP leading PPG) corresponds to lag < 0.
 
     Parameters
     ----------
@@ -176,32 +184,61 @@ def compute_ptt_offset(
         PPG waveform (channel 1).
     abp : np.ndarray
         ABP waveform (channel 2).
-    max_lag : int
-        Maximum lag to test (default 60 samples).
+    max_lag : Optional[int]
+        Upper lag bound (exclusive).
+    min_lag : Optional[int]
+        Lower lag bound (inclusive).
+    W : Optional[int]
+        Symmetric window half-width: lag in [-W, W). Defaults to 37 under A3.
 
     Returns
     -------
     best_lag : int
-        Lag in [0, max_lag) yielding maximum cross-correlation.
+        Lag in [min_lag, max_lag) yielding maximum cross-correlation.
     max_corr : float
         Maximum cross-correlation coefficient at best_lag.
     """
+    if W is not None:
+        low = -int(W)
+        high = int(W)
+    elif min_lag is not None and max_lag is not None:
+        low = int(min_lag)
+        high = int(max_lag)
+    elif max_lag is not None and min_lag is None:
+        if max_lag == 60:
+            low = 0
+            high = 60
+        else:
+            low = -int(max_lag)
+            high = int(max_lag)
+    else:
+        low = -37
+        high = 37
+
     ppg = np.asarray(ppg, dtype=np.float64)
     abp = np.asarray(abp, dtype=np.float64)
 
     ppg_c = ppg - np.mean(ppg)
     abp_c = abp - np.mean(abp)
 
-    corrs = []
-    for lag in range(0, max_lag):
-        a_sub = abp_c[lag:]
-        p_sub = ppg_c[:-lag or None]
+    best_lag = low
+    best_corr = -2.0
+
+    for lag in range(low, high):
+        if lag >= 0:
+            a_sub = abp_c[lag:]
+            p_sub = ppg_c[:-lag or None]
+        else:
+            k = -lag
+            a_sub = abp_c[:-k]
+            p_sub = ppg_c[k:]
         norm = np.linalg.norm(a_sub) * np.linalg.norm(p_sub) + 1e-12
         r = float(np.dot(p_sub, a_sub) / norm)
-        corrs.append(r)
+        if r > best_corr:
+            best_corr = r
+            best_lag = lag
 
-    best_lag = int(np.argmax(corrs))
-    return best_lag, float(corrs[best_lag])
+    return best_lag, float(best_corr)
 
 
 def evaluate_beat_agreement(
@@ -270,6 +307,8 @@ def process_segment(
     ppg: np.ndarray,
     abp: np.ndarray,
     fs: int = 125,
+    W: int = 37,
+    tol_ms: float = 50.0,
 ) -> Dict[str, Any]:
     """Process a single 10-s segment for PPG fiducials and ABP agreement.
 
@@ -305,12 +344,12 @@ def process_segment(
     abp_peaks = detect_peaks_elgendi(abp_scaled, fs=fs)
     abp_feet = detect_feet(abp, abp_peaks, fs=fs)
 
-    # 3. Compute PTT offset lag
-    best_lag, max_corr = compute_ptt_offset(ppg, abp, max_lag=60)
+    # 3. Compute PTT offset lag (Amendment A3: symmetric window [-W, W))
+    best_lag, max_corr = compute_ptt_offset(ppg, abp, W=W)
 
     # 4. Evaluate agreement
     n_ppg, matched, frac, passes = evaluate_beat_agreement(
-        ppg_peaks, abp_peaks, best_lag, fs=fs, tol_ms=50.0
+        ppg_peaks, abp_peaks, best_lag, fs=fs, tol_ms=tol_ms
     )
 
     return {
@@ -332,10 +371,11 @@ def process_segment(
 def run_validation(
     mat_path: str = "data/raw/VitalDB_Train_Subset.mat",
     parquet_path: str = "data/parquet/train_file.parquet",
-    output_report_path: str = "results/detector_agreement.md",
+    output_report_path: str = "results/detector_agreement_A3.md",
     fs: int = 125,
+    W: int = 37,
 ) -> Dict[str, Any]:
-    """Run detector validation across all validation subjects in the training set."""
+    """Run detector validation across all validation subjects in the training set under Amendment A3."""
     import time
     from pathlib import Path
     import h5py
@@ -378,7 +418,7 @@ def run_validation(
             for i in range(block_len):
                 ppg = block[:, 1, i]
                 abp = block[:, 2, i]
-                res = process_segment(ppg, abp, fs=fs)
+                res = process_segment(ppg, abp, fs=fs, W=W)
 
                 out_pos = curr_idx + i
                 n_ppg_arr[out_pos] = res["n_ppg_beats"]
@@ -405,10 +445,30 @@ def run_validation(
 
     # Compute key statistics
     overall_pass_share = float(np.mean(passes_arr))
+    q10 = float(np.percentile(frac_arr, 10))
     q25 = float(np.percentile(frac_arr, 25))
     median_frac = float(np.median(frac_arr))
     q75 = float(np.percentile(frac_arr, 75))
+    q90 = float(np.percentile(frac_arr, 90))
     iqr_frac = q75 - q25
+
+    # Boundary hits
+    bound_neg = int(np.sum(ptt_arr == -W))
+    bound_pos = int(np.sum(ptt_arr == W - 1))
+    bound_neg_pct = bound_neg / n_val * 100.0
+    bound_pos_pct = bound_pos / n_val * 100.0
+
+    # Lag histogram
+    hist_bins = [
+        (-W, -30), (-30, -20), (-20, -10), (-10, 0),
+        (0, 10), (10, 20), (20, 30), (30, W)
+    ]
+    hist_rows = []
+    for low_b, high_b in hist_bins:
+        cnt = int(np.sum((ptt_arr >= low_b) & (ptt_arr < high_b)))
+        pct = cnt / n_val * 100.0
+        hist_rows.append(f"| [{low_b}, {high_b}) samples ({low_b/fs*1000:.0f} to {high_b/fs*1000:.0f} ms) | {cnt:,} | {pct:.2f}% |")
+    hist_table = "\n".join(hist_rows)
 
     # By class: SBP >= 130 vs < 130
     mask_ge_130 = val_df["sbp"] >= 130
@@ -438,19 +498,20 @@ def run_validation(
     )
 
     # Format Markdown Report
-    report = f"""# Detector Validation on Validation Subjects (Frozen Elgendi)
+    report = f"""# Detector Validation on Validation Subjects (Amendment A3)
 
 **Date:** 2026-10-29  
+**Amendment:** A3 (Symmetric PTT window [-W, W) with W = {W} samples / ~300 ms at 125 Hz)  
 **Split:** VitalDB_Train_Subset.mat validation cohort (seed 42, 20% of training subjects)  
 **Subjects:** {n_val_subj} subjects | **Segments:** {n_val:,} segments (10 s at 125 Hz)  
 **Detector Configuration:**
 - Method: Elgendi et al. (2013) two-moving-average method on Signals channel 1 as stored (no extra filter)
-- Parameters (frozen): W1 = 111 ms (14 samples), W2 = 667 ms (83 samples), beta = 0.02
+- Parameters (frozen): W1 = 111 ms (14 samples), W2 = 667 ms (83 samples), beta = 0.02 (unchanged)
 - Foot detection: minimum in 300 ms window before each systolic peak
 - Turning points: minimum between consecutive systolic peaks
 - ABP Reference: channel 2 (min-max scaled for thresholding, same Elgendi parameters)
-- PTT Lag: optimal cross-correlation lag in [0, 60) samples (~0 to 480 ms)
-- Beat Agreement Rule: PPG peak matched if within +/-50 ms (+/-6.25 samples) of PTT-corrected ABP peak; segment passes if matched beat fraction >= 80%
+- PTT Search Window (Amendment A3): [{-W}, {W}) samples (~{-W/fs*1000:.0f} ms to +{(W-1)/fs*1000:.0f} ms)
+- Beat Agreement Rule: PPG peak matched if within +/-50 ms (+/-6.25 samples) of PTT-corrected ABP peak; segment passes if matched beat fraction >= 80% (unchanged)
 
 ---
 
@@ -461,6 +522,7 @@ def run_validation(
 | **Validation Segments Passing (>= 80% Match)** | **{overall_pass_share * 100:.2f}%** ({int(passes_arr.sum()):,}/{n_val:,}) |
 | **Matched-Beat Fraction Median** | **{median_frac * 100:.1f}%** |
 | **Matched-Beat Fraction IQR** | **{iqr_frac * 100:.1f}%** (Q1: {q25 * 100:.1f}%, Q3: {q75 * 100:.1f}%) |
+| **Matched-Beat Percentiles** | P10: {q10 * 100:.1f}%, P90: {q90 * 100:.1f}%, Min: {float(np.min(frac_arr)) * 100:.1f}%, Max: {float(np.max(frac_arr)) * 100:.1f}% |
 | **Mean Matched-Beat Fraction** | {float(np.mean(frac_arr)) * 100:.2f}% (SD: {float(np.std(frac_arr)) * 100:.2f}%) |
 
 ---
@@ -478,7 +540,21 @@ def run_validation(
 
 ---
 
-## 3. Signal & Physiological Characteristics
+## 3. PTT Lag Distribution and Boundary Hits
+
+### Boundary Hits
+- **Lower Boundary (lag = {-W} / {-W/fs*1000:.0f} ms):** {bound_neg:,} segments ({bound_neg_pct:.2f}%)
+- **Upper Boundary (lag = {W-1} / {(W-1)/fs*1000:.0f} ms):** {bound_pos:,} segments ({bound_pos_pct:.2f}%)
+- **Total Boundary Hits:** {bound_neg + bound_pos:,} segments ({(bound_neg + bound_pos)/n_val*100:.2f}%)
+
+### Lag Histogram
+| Lag Interval | Segments | Share (%) |
+|---|---|---|
+{hist_table}
+
+---
+
+## 4. Signal & Physiological Characteristics
 
 | Feature / Metric | Median | IQR (Q1 - Q3) | Range [Min, Max] |
 |---|---|---|---|
@@ -490,7 +566,7 @@ def run_validation(
 
 ---
 
-## 4. Detector Failure Rule Evaluation
+## 5. Detector Failure Rule Evaluation
 
 - **Criterion:** Pass share must be >= 80.0% of validation segments.
 - **Measured Pass Share:** **{overall_pass_share * 100:.2f}%**
