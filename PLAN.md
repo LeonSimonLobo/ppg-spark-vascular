@@ -49,6 +49,9 @@ Sex coding: 1 = male, 0 = female (ingest.py).
 ## Detector failure rule
 If fewer than 80% of validation segments pass the agreement check, Step 1 and all later morphology steps are reported as blocked, no morphology gain is claimed, and Steps 0a and 0 are still reported. No alternative detector may be tried after seeing agreement results.
 
+## Test-set policy
+The test set is scored once, in a single run, for Steps 0a and 0 only, because morphology steps are blocked by the failure rule. The test set is spent after that run and cannot be reused for any later detector or model.
+
 ## Metrics
 Headline: AUROC and balanced accuracy, with 95% subject-level bootstrap CIs (2000 resamples over test subjects).
 Secondary: F1 at a threshold chosen on validation.
