@@ -1,8 +1,11 @@
-# Data and artifacts (excluded as per project requirements)
+# Data and artifacts
 data/
 *.mat
 *.parquet
+kaggle.json
 __pycache__/
+.venv/
+results/*.parquet
 
 # Python
 *.py[cod]
@@ -11,7 +14,6 @@ __pycache__/
 .Python
 env/
 venv/
-.venv/
 ENV/
 build/
 dist/

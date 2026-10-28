@@ -1,10 +1,11 @@
-pyspark
-pandas
 numpy
-scipy
+pandas
 pyarrow
-scikit-learn
-matplotlib
 h5py
-mat73
+scipy
+matplotlib
+scikit-learn
+pyspark
 shap
+pytest
+pyyaml
