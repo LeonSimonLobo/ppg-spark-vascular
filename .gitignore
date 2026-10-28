@@ -6,6 +6,7 @@ kaggle.json
 __pycache__/
 .venv/
 results/*.parquet
+models/*.pkl
 
 # Python
 *.py[cod]
