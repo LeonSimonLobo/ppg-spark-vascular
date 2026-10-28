@@ -1,3 +1,9 @@
+# [SUPERSEDED] Between-Subject Pre-Registration Plan (PLAN.md)
+
+> [!NOTE]
+> **Superceded Status:** This document is superseded for the within-subject question by [PLAN_W.md](PLAN_W.md) (amendments A2 to A4 and W1 retained below for the record).
+> All between-subject morphology and demographic baseline evaluations are inactive; CalFree is reserved exclusively for the within-subject study in PLAN_W.md.
+
 ## Research question
 On subject-disjoint evaluation, we measure how much quality-aware PPG morphology adds to an age, sex and BMI baseline for classifying hypertensive-range SBP, and how that gain depends on signal filtering, feature set and training size.
 
