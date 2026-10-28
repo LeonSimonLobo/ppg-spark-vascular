@@ -132,6 +132,48 @@ def test_ptt_offset_and_agreement():
     assert res["matched_fraction"] >= 0.80
 
 
+def test_synthetic_lag_plus_30():
+    """Verify PTT offset and beat agreement when ABP is delayed by +30 samples (PPG leads ABP)."""
+    fs = 125
+    ppg, ppg_peaks, _ = generate_synthetic_pulse_train(
+        fs=fs, duration_s=10.0, bpm=75.0, noise_std=0.0, seed=42
+    )
+    known_lag = 30
+    abp = np.zeros_like(ppg)
+    abp[known_lag:] = ppg[:-known_lag] * 40.0 + 80.0
+    abp[:known_lag] = np.mean(abp[known_lag:])
+
+    best_lag, max_corr = compute_ptt_offset(ppg, abp, max_lag=60)
+    assert best_lag == known_lag, f"Expected lag {known_lag}, got {best_lag}"
+    assert max_corr > 0.90, f"Expected high correlation, got {max_corr}"
+
+    res = process_segment(ppg, abp, fs=fs)
+    assert res["passes_rule"] is True
+    assert res["matched_fraction"] >= 0.80
+
+
+def test_synthetic_lag_minus_30():
+    """Verify PTT offset and beat agreement when ABP leads PPG by 30 samples (lag = -30)."""
+    fs = 125
+    base, true_peaks, _ = generate_synthetic_pulse_train(
+        fs=fs, duration_s=10.0, bpm=75.0, noise_std=0.0, seed=42
+    )
+    # Physiological direction: ABP pulse precedes PPG pulse by 30 samples
+    known_lag = -30
+    abp = base * 40.0 + 80.0
+    ppg = np.zeros_like(base)
+    ppg[30:] = base[:-30]
+    ppg[:30] = np.mean(ppg[30:])
+
+    best_lag, max_corr = compute_ptt_offset(ppg, abp, max_lag=60)
+    assert best_lag == known_lag, f"Expected lag {known_lag}, got {best_lag}"
+    assert max_corr > 0.90, f"Expected high correlation, got {max_corr}"
+
+    res = process_segment(ppg, abp, fs=fs)
+    assert res["passes_rule"] is True
+    assert res["matched_fraction"] >= 0.80
+
+
 def test_empty_and_flat_signals():
     """Verify robust handling of empty, flat, or constant signals."""
     flat = np.zeros(1250)
