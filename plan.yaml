@@ -1,1 +1,8 @@
-# plan.yaml placeholder
+claim: TODO
+seed: 42
+level: TODO # subject | segment
+sbp_threshold: TODO # 120 | 130 | 140
+class_weights: TODO # true | false
+primary_metric: TODO # accuracy | balanced_accuracy
+folds: 5
+quality: { min_sqi_template_corr: 0.8, min_valid_beats: 5 }
