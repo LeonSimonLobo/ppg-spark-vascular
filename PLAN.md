@@ -22,13 +22,18 @@ Sex coding: 1 = male, 0 = female (ingest.py).
 - Test set used exactly once for the final comparison.
 - All ladder steps, hyperparameters and quality thresholds are chosen on validation only.
 
-## Fiducials (Option A, frozen before any detector runs)
+## Fiducials (Option A, frozen before any detector runs; amended under A3)
 - Systolic peaks and turning points: Elgendi et al. (2013) two-moving-average method, applied to Signals channel 1 as stored, with no additional filtering.
-- Frozen Elgendi parameters: systolic peak window W1 = 111 ms; beat window W2 = 667 ms; offset beta = 0.02 (Elgendi et al., 2013 defaults).
+- Frozen Elgendi parameters: systolic peak window W1 = 111 ms; beat window W2 = 667 ms; offset beta = 0.02 (Elgendi et al., 2013 defaults). Unchanged under amendment A3.
 - Foot: the PPG minimum in the 300 ms before each systolic peak.
 - ABP reference (validation only, never a feature): ABP peaks and feet from channel 2. The ABP filter is undocumented; this is stated as a limitation.
-- PTT offset per segment: the lag from 0 to 60 samples that maximizes PPG-ABP cross-correlation, as in ingest.py.
-- Agreement: a PPG peak is matched if it falls within +/-50 ms of a PTT-corrected ABP peak. A segment passes if at least 80% of its beats are matched. Agreement is measured on validation subjects only and reported as a result.
+- PTT offset per segment (Amendment A3):
+  - The original search window [0, 60) samples is withdrawn. The initial validation agreement result of 68.93% remains recorded in results/detector_agreement.md, marked as superseded by Amendment A3, because the [0, 60) window is one-sided and cannot represent the physiological timing where ABP leads PPG (results/ptt_sign_check.md).
+  - Fixed sign convention: cross-correlation aligns ABP(t + lag) with PPG(t). Because arterial pulse waves reach the central/radial arterial catheter before the peripheral digital capillary bed (t_ABP < t_PPG), physiological transit delays correspond to negative lags (lag < 0).
+  - The new window is symmetric: [-W, W), with W = 37 samples (about 300 ms at 125 Hz: 37 / 125 = 296 ms).
+  - Physiological basis for 300 ms: Pulse transit time (PTT) and pulse arrival time (PAT) from central arteries to peripheral digits typically range from 100 to 300 ms across normotensive and hypertensive states (Allen, 2007, "Photoplethysmography and its application in clinical physiological measurement", Physiol. Meas. 28: R1–R39; Peter et al., 2014, "Pulse transit time: a review of physiological and technical considerations", Physiol. Meas. 35: R1–R29). A window of [-37, 37) samples fully spans -296 ms to +288 ms, capturing physiological pulse arrival delays without aliasing into adjacent cardiac cycles at physiological heart rates.
+  - Disclosure: Inspection of validation agreement results and diagnostic boundary hits (results/detector_diagnostics.md, results/ptt_sign_check.md) directly informed the discovery of this window and sign error.
+- Agreement: a PPG peak is matched if it falls within +/-50 ms of a PTT-corrected ABP peak (abp_peak - ptt_offset). A segment passes if at least 80% of its beats are matched. The 80% threshold and all Elgendi parameters remain unchanged. Agreement is measured on validation subjects only and reported as a result.
 - Published PulseDB fiducials are not used. Segment_Files (about 143 GB) was not downloaded. A later cross-check against it is optional.
 
 ## Demographic rule
