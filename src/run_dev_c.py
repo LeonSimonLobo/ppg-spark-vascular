@@ -6,7 +6,7 @@ Pipeline steps:
 2. Run 5-fold cross-validation with seeded subject permutation for primary target (SBP >= 120 mmHg)
 3. Run 5-fold CV for sensitivity target (SBP >= 130 mmHg)
 4. Compute clustered subject-level bootstrap percentile CIs (2,000 draws, seed 42)
-5. Compute paired bootstrap differences: (C1 - C0), (C2 - C1), (C2 - C0)
+5. Compute paired bootstrap differences: (C1 - C0), (C2m - C1), (C2 - C2m), (C2 - C0)
 6. Fit and freeze final models on all development data to models/*_frozen.pkl
 7. Evaluate frozen models on CalFree extra validation cohort (144 subjects, 57,600 segments)
    Assert file_split == 'calfree_test'.
@@ -26,6 +26,7 @@ from src.train_c import (
     train_and_eval_cv,
     fit_and_freeze_full_models,
     evaluate_on_calfree,
+    LADDER_STEPS,
 )
 
 
@@ -191,11 +192,15 @@ def generate_markdown_report(
     p130_train = np.mean(train_df["y_130"]) * 100.0
     p120_cf = np.mean(calfree_df["y_120"]) * 100.0
 
+    plan_path = Path("PLAN_C.md")
+    plan_hash = hashlib.sha256(plan_path.read_bytes()).hexdigest() if plan_path.exists() else "UNKNOWN"
+
     lines = [
         "# Study C Development & Cross-Cohort Validation Report",
         "",
         "**Date:** 2026-10-29  ",
         "**Specification:** `PLAN_C.md` (Cross-subject SBP classification on unseen subjects)  ",
+        f"**Pre-Registered Plan Hash:** `{plan_hash}`  ",
         "**Final Test Boundary:** `VitalDB_AAMI_Cal_Subset.mat` is **PRISTINE and UNREAD**. Scored strictly once after models are frozen.  ",
         "",
         "---",
@@ -221,10 +226,11 @@ def generate_markdown_report(
     ladder_desc = {
         "C0": "Age, Sex, BMI",
         "C1": "C0 + PPG Heart Rate (hr_ibi)",
-        "C2": "C1 + HR (beat count) + IBI SD + Morphology + Quality",
+        "C2m": "C1 + Morphology Only (rise_time, pulse_width, decay_ratio)",
+        "C2": "C1 + Morphology + Quality (beat_count, is_clipped, snr_ratio, ibi_sd)",
     }
 
-    for step in ["C0", "C1", "C2"]:
+    for step in LADDER_STEPS:
         for fam, fname in [("lr", "Logistic Reg (regParam 0.01)"), ("gbt", "GBT (depth 5, iter 100)")]:
             k = f"{step}_{fam}"
             m = pooled_metrics_120[k]
@@ -241,7 +247,7 @@ def generate_markdown_report(
 
     lines.extend([
         "",
-        "### Paired Incremental Differences on Primary Target (5-Fold CV Pooled OOF)",
+        "### Stepwise Paired Gain Decomposition (5-Fold CV Pooled OOF)",
         "",
         "| Comparison | Model Family | Paired $\\Delta\\text{Accuracy}$ [95% CI] | Paired $\\Delta\\text{AUROC}$ [95% CI] |",
         "|---|---|---|---|",
@@ -253,18 +259,27 @@ def generate_markdown_report(
         m1 = pooled_metrics_120[f"C1_{fam}"]
         m0 = pooled_metrics_120[f"C0_{fam}"]
         lines.append(
-            f"| **C1 vs C0 (Gain from Heart Rate)** | {fname} | "
+            f"| **C1 vs C0 (Gain from Heart Rate IBI)** | {fname} | "
             f"**{(m1['accuracy'] - m0['accuracy']) * 100.0:+.2f}%** [{d_acc_10[0] * 100.0:+.2f}%, {d_acc_10[1] * 100.0:+.2f}%] | "
             f"**{(m1['auroc'] - m0['auroc']):+.4f}** [{d_auc_10[0]:+.4f}, {d_auc_10[1]:+.4f}] |"
         )
 
-        d_acc_21 = paired_cis_120[f"delta_acc_C2_{fam}_minus_C1_{fam}"]
-        d_auc_21 = paired_cis_120[f"delta_auc_C2_{fam}_minus_C1_{fam}"]
+        d_acc_2m1 = paired_cis_120[f"delta_acc_C2m_{fam}_minus_C1_{fam}"]
+        d_auc_2m1 = paired_cis_120[f"delta_auc_C2m_{fam}_minus_C1_{fam}"]
+        m2m = pooled_metrics_120[f"C2m_{fam}"]
+        lines.append(
+            f"| **C2m vs C1 (Gain from Pulse Morphology Shape)** | {fname} | "
+            f"**{(m2m['accuracy'] - m1['accuracy']) * 100.0:+.2f}%** [{d_acc_2m1[0] * 100.0:+.2f}%, {d_acc_2m1[1] * 100.0:+.2f}%] | "
+            f"**{(m2m['auroc'] - m1['auroc']):+.4f}** [{d_auc_2m1[0]:+.4f}, {d_auc_2m1[1]:+.4f}] |"
+        )
+
+        d_acc_22m = paired_cis_120[f"delta_acc_C2_{fam}_minus_C2m_{fam}"]
+        d_auc_22m = paired_cis_120[f"delta_auc_C2_{fam}_minus_C2m_{fam}"]
         m2 = pooled_metrics_120[f"C2_{fam}"]
         lines.append(
-            f"| **C2 vs C1 (Gain from Morphology + Quality)** | {fname} | "
-            f"**{(m2['accuracy'] - m1['accuracy']) * 100.0:+.2f}%** [{d_acc_21[0] * 100.0:+.2f}%, {d_acc_21[1] * 100.0:+.2f}%] | "
-            f"**{(m2['auroc'] - m1['auroc']):+.4f}** [{d_auc_21[0]:+.4f}, {d_auc_21[1]:+.4f}] |"
+            f"| **C2 vs C2m (Gain from Signal Quality Fields)** | {fname} | "
+            f"**{(m2['accuracy'] - m2m['accuracy']) * 100.0:+.2f}%** [{d_acc_22m[0] * 100.0:+.2f}%, {d_acc_22m[1] * 100.0:+.2f}%] | "
+            f"**{(m2['auroc'] - m2m['auroc']):+.4f}** [{d_auc_22m[0]:+.4f}, {d_auc_22m[1]:+.4f}] |"
         )
 
         d_acc_20 = paired_cis_120[f"delta_acc_C2_{fam}_minus_C0_{fam}"]
@@ -285,7 +300,7 @@ def generate_markdown_report(
         "|---|---|---|---|---|---|",
     ])
 
-    for step in ["C0", "C1", "C2"]:
+    for step in LADDER_STEPS:
         for fam, fname in [("lr", "Logistic Reg"), ("gbt", "GBT")]:
             k = f"{step}_{fam}"
             m = pooled_metrics_130[k]
@@ -312,7 +327,7 @@ def generate_markdown_report(
         "|---|---|---|---|---|---|",
     ])
 
-    for step in ["C0", "C1", "C2"]:
+    for step in LADDER_STEPS:
         for fam, fname in [("lr", "Logistic Reg"), ("gbt", "GBT")]:
             k = f"{step}_{fam}"
             m = cf_metrics[k]
@@ -367,7 +382,7 @@ def generate_markdown_report(
         "",
         "## 6. Pre-Registration Invariant Status",
         "",
-        "- `PLAN_C.md` pre-registration committed to git.",
+        "- `PLAN_C.md` pre-registration and Amendment C1 committed to git.",
         "- `VitalDB_AAMI_Cal_Subset.mat` has **NOT** been opened or read.",
         "- Pre-scoring lock `results/.test_locked_C` must be created before running single-pass test script.",
     ])
