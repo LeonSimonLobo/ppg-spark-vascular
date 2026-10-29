@@ -1,25 +1,26 @@
 """Single-pass test evaluation script for Study C on VitalDB AAMI_Cal cohort (PLAN_C.md).
 
-Pre-registered in PLAN_C.md.
-Execution Invariants & Pre-Flight Gating:
-1. Git Tag: Refuses to run unless git tag 'plan-c-locked' exists in repository.
-2. Plan Hash: Refuses to run unless PLAN_C.md SHA-256 matches 9be7f444e02097dccba501fbe7fb39a02f2295b19095ec36f96cbedb304afc79.
-3. Development Results: Refuses to run unless results/dev_C.md exists and contains verified frozen model hashes.
-4. Lock Check: Refuses to run if results/test_C.md or results/.test_locked_C already exists.
-5. Lock before scoring: results/.test_locked_C is created BEFORE any AAMI_Cal feature extraction or scoring.
-6. Pristine boundary: loads strictly VitalDB_AAMI_Cal_Subset.mat. AAMI_Test and CalBased remain untouched.
-7. Single-segment inductive evaluation: zero within-subject centering or session transduction.
-8. Median imputation with missing-indicator columns using training-set medians. Zero rows dropped.
-9. Primary endpoint: paired bootstrap difference in accuracy (C2 - C0) over subjects (2,000 resamples, seed 42).
-10. Single-pass evaluation: no parameter or threshold changes after scoring.
+Pre-registered in PLAN_C.md (including Amendment C1).
+
+Pre-Flight Security Gates (Order of Operations):
+1. Gate 1: Git tag 'plan-c-locked' exists in the repository.
+2. Gate 2: results/dev_C.md exists.
+3. Gate 3: The SHA-256 hash of PLAN_C.md equals the hash recorded in results/dev_C.md.
+4. Gate 4: Frozen model hashes in results/dev_C.md match the model files on disk.
+5. Gate 5: results/test_C.md does NOT exist.
+6. Gate 6: results/.test_locked_C does NOT exist.
+7. Lock before scoring: results/.test_locked_C is created BEFORE any AAMI_Cal data is opened.
+
+No code path opens VitalDB_AAMI_Cal_Subset.mat or any AAMI parquet until ALL gates pass.
 """
 
 import hashlib
 from pathlib import Path
 import pickle
+import re
 import subprocess
 import time
-from typing import Dict, Any, Tuple, List
+from typing import Dict, Any, Tuple, List, Optional
 import h5py
 import numpy as np
 import pandas as pd
@@ -30,10 +31,11 @@ from src.features_c import (
     get_feature_matrix,
     C0_COLS,
     C1_COLS,
+    C2m_COLS,
     C2_COLS,
 )
 from src.prospective_and_scale_w import fast_auc_with_ties
-from src.train_c import compute_metrics, clustered_subject_bootstrap_metrics
+from src.train_c import compute_metrics, clustered_subject_bootstrap_metrics, LADDER_STEPS
 
 LOCK_FILE_PATH = "results/.test_locked_C"
 REPORT_PATH = "results/test_C.md"
@@ -41,11 +43,26 @@ DEV_REPORT_PATH = "results/dev_C.md"
 PLAN_FILE_PATH = "PLAN_C.md"
 MAT_PATH = "data/raw/VitalDB_AAMI_Cal_Subset.mat"
 
-EXPECTED_PLAN_C_HASH = "9be7f444e02097dccba501fbe7fb39a02f2295b19095ec36f96cbedb304afc79"
 
+def verify_preflight_gates(
+    dev_report_path: str = DEV_REPORT_PATH,
+    plan_file_path: str = PLAN_FILE_PATH,
+    test_report_path: str = REPORT_PATH,
+    lock_file_path: str = LOCK_FILE_PATH,
+) -> Dict[str, str]:
+    """Enforce pre-flight security and protocol gates before any test execution.
 
-def verify_preflight_gates() -> None:
-    """Enforce pre-flight security and protocol gates before any execution."""
+    Order of operations:
+    1. Gate 1: Check git tag 'plan-c-locked' exists in repository.
+    2. Gate 2: Check dev report (results/dev_C.md) exists.
+    3. Gate 3: Verify PLAN_C.md SHA-256 hash equals hash recorded in dev report.
+    4. Gate 4: Parse frozen model hashes from dev report and verify models on disk match.
+    5. Gate 5: Check results/test_C.md does NOT exist.
+    6. Gate 6: Check results/.test_locked_C does NOT exist.
+
+    Returns:
+    - dict of verified frozen model hashes {model_key: expected_hash}
+    """
     print("Executing pre-flight gates...")
 
     # Gate 1: Check git tag plan-c-locked exists
@@ -57,56 +74,93 @@ def verify_preflight_gates() -> None:
         ).strip().splitlines()
         if "plan-c-locked" not in tag_output:
             raise RuntimeError(
-                "PRE-FLIGHT GATE FAILED: Required git tag 'plan-c-locked' does not exist in repository!\n"
+                "PRE-FLIGHT GATE 1 FAILED: Required git tag 'plan-c-locked' does not exist in repository!\n"
                 "The protocol requires tagging the repository prior to test scoring."
             )
         print("Gate 1 (Git Tag 'plan-c-locked'): PASS")
     except Exception as e:
-        if "PRE-FLIGHT GATE FAILED" in str(e):
+        if "PRE-FLIGHT GATE 1 FAILED" in str(e):
             raise
         raise RuntimeError(f"Gate 1 Git tag check error: {e}")
 
-    # Gate 2: Verify PLAN_C.md SHA-256 hash
-    plan_p = Path(PLAN_FILE_PATH)
-    if not plan_p.exists():
-        raise FileNotFoundError(f"PRE-FLIGHT GATE FAILED: {PLAN_FILE_PATH} not found!")
-    actual_plan_hash = hashlib.sha256(plan_p.read_bytes()).hexdigest()
-    if actual_plan_hash != EXPECTED_PLAN_C_HASH:
-        raise ValueError(
-            f"PRE-FLIGHT GATE FAILED: PLAN_C.md hash mismatch!\n"
-            f"Expected: {EXPECTED_PLAN_C_HASH}\n"
-            f"Actual:   {actual_plan_hash}\n"
-            "Pre-registration plan text has been modified."
-        )
-    print(f"Gate 2 (PLAN_C.md Hash Verification): PASS ({actual_plan_hash[:16]}...)")
-
-    # Gate 3: Check results/dev_C.md exists
-    dev_p = Path(DEV_REPORT_PATH)
+    # Gate 2: Check results/dev_C.md exists
+    dev_p = Path(dev_report_path)
     if not dev_p.exists():
         raise FileNotFoundError(
-            f"PRE-FLIGHT GATE FAILED: {DEV_REPORT_PATH} not found! "
+            f"PRE-FLIGHT GATE 2 FAILED: {dev_report_path} not found! "
             "Development CV and model freezing must be completed before test scoring."
         )
-    print("Gate 3 (Development Report results/dev_C.md exists): PASS")
+    print(f"Gate 2 (Development Report {dev_report_path} exists): PASS")
+    dev_content = dev_p.read_text(encoding="utf-8")
 
-    # Gate 4: Check results/test_C.md and results/.test_locked_C do not exist
-    test_rep_p = Path(REPORT_PATH)
+    # Gate 3: Check PLAN_C.md SHA-256 hash equals the hash recorded in dev report
+    plan_p = Path(plan_file_path)
+    if not plan_p.exists():
+        raise FileNotFoundError(f"PRE-FLIGHT GATE 3 FAILED: {plan_file_path} not found!")
+
+    actual_plan_hash = hashlib.sha256(plan_p.read_bytes()).hexdigest()
+
+    match_plan_hash = re.search(r"Pre-Registered Plan Hash:\s*`([a-f0-9]{64})`", dev_content)
+    if not match_plan_hash:
+        raise ValueError(
+            f"PRE-FLIGHT GATE 3 FAILED: No pre-registered plan hash found in {dev_report_path}!"
+        )
+    recorded_plan_hash = match_plan_hash.group(1)
+
+    if actual_plan_hash != recorded_plan_hash:
+        raise ValueError(
+            f"PRE-FLIGHT GATE 3 FAILED: PLAN_C.md hash on disk does not match recorded plan hash in {dev_report_path}!\n"
+            f"Recorded: {recorded_plan_hash}\n"
+            f"On Disk:  {actual_plan_hash}\n"
+            "Pre-registration plan text has been altered."
+        )
+    print(f"Gate 3 (PLAN_C.md Hash Verification): PASS ({actual_plan_hash[:16]}...)")
+
+    # Gate 4: Parse frozen model hashes from dev report and verify model files on disk
+    model_hash_matches = re.findall(r"\|\s*\*\*`([^`]+)`\*\*\s*\|\s*`([^`]+)`\s*\|\s*`([a-f0-9]{64})`\s*\|", dev_content)
+    if not model_hash_matches:
+        raise ValueError(
+            f"PRE-FLIGHT GATE 4 FAILED: No frozen model hashes found in {dev_report_path}!"
+        )
+
+    expected_hashes = {}
+    for key, path_str, sha in model_hash_matches:
+        expected_hashes[key] = sha
+        p = Path(path_str)
+        if not p.exists():
+            raise FileNotFoundError(f"PRE-FLIGHT GATE 4 FAILED: Model file {p} does not exist on disk!")
+        actual_model_sha = hashlib.sha256(p.read_bytes()).hexdigest()
+        if actual_model_sha != sha:
+            raise ValueError(
+                f"PRE-FLIGHT GATE 4 FAILED: Hash mismatch for model {p}!\n"
+                f"Recorded in report: {sha}\n"
+                f"Actual on disk:     {actual_model_sha}"
+            )
+    print(f"Gate 4 (Model Files Hash Verification on Disk): PASS ({len(expected_hashes)} models verified)")
+
+    # Gate 5: Check results/test_C.md does NOT exist
+    test_rep_p = Path(test_report_path)
     if test_rep_p.exists():
         raise RuntimeError(
-            f"PRE-FLIGHT GATE FAILED: Test report {REPORT_PATH} already exists! "
+            f"PRE-FLIGHT GATE 5 FAILED: Test report {test_report_path} already exists! "
             "Repeated evaluations on held-out test data are strictly prohibited."
         )
-    lock_p = Path(LOCK_FILE_PATH)
+    print("Gate 5 (No prior test report): PASS")
+
+    # Gate 6: Check results/.test_locked_C does NOT exist
+    lock_p = Path(lock_file_path)
     if lock_p.exists():
         raise RuntimeError(
-            f"PRE-FLIGHT GATE FAILED: Test lock {LOCK_FILE_PATH} already exists! "
+            f"PRE-FLIGHT GATE 6 FAILED: Test lock {lock_file_path} already exists! "
             "Scoring has already occurred or is currently in progress."
         )
-    print("Gate 4 (No prior test report or lock file): PASS")
+    print("Gate 6 (No prior test lock file): PASS")
+
+    return expected_hashes
 
 
-def check_and_acquire_lock_pre_scoring(git_commit: str = "HEAD") -> None:
-    """Acquire test lock BEFORE any test data is processed. Aborts if already locked."""
+def check_and_acquire_lock_pre_scoring(git_commit: str = "HEAD", plan_hash: str = "") -> None:
+    """Acquire test lock BEFORE any test data is opened. Aborts if already locked."""
     lock_p = Path(LOCK_FILE_PATH)
     if lock_p.exists():
         raise RuntimeError(
@@ -118,7 +172,7 @@ def check_and_acquire_lock_pre_scoring(git_commit: str = "HEAD") -> None:
         f"# TEST LOCK: Study C (AAMI_Cal single evaluation)\n"
         f"Acquired: {time.strftime('%Y-%m-%dT%H:%M:%S%z')}\n"
         f"Git Commit: {git_commit}\n"
-        f"Plan Hash: {EXPECTED_PLAN_C_HASH}\n"
+        f"Plan Hash: {plan_hash}\n"
         f"Status: SCORING_IN_PROGRESS\n"
     )
     lock_p.write_text(lock_content, encoding="utf-8")
@@ -126,7 +180,7 @@ def check_and_acquire_lock_pre_scoring(git_commit: str = "HEAD") -> None:
 
 
 def verify_frozen_model_hashes(expected_hashes: Dict[str, str]) -> Dict[str, Any]:
-    """Verify SHA-256 hashes of all frozen model artifacts. Halts on mismatch."""
+    """Verify and unpickle all frozen model artifacts."""
     loaded_artifacts = {}
     for key, expected_hash in expected_hashes.items():
         model_path = Path(f"models/{key}_frozen.pkl")
@@ -189,7 +243,6 @@ def load_aami_cal_metadata(mat_path: str = MAT_PATH) -> pd.DataFrame:
 
 
 def score_aami_cal_test(
-    expected_hashes: Dict[str, str],
     mat_path: str = MAT_PATH,
     output_report: str = REPORT_PATH,
     n_boot: int = 2000,
@@ -202,17 +255,20 @@ def score_aami_cal_test(
     print("=" * 70)
 
     # 1. Execute Pre-Flight Gates
-    verify_preflight_gates()
+    expected_hashes = verify_preflight_gates()
+
+    plan_path = Path(PLAN_FILE_PATH)
+    plan_hash = hashlib.sha256(plan_path.read_bytes()).hexdigest()
 
     # 2. Acquire Pre-Scoring Lock
-    check_and_acquire_lock_pre_scoring(git_commit=git_commit)
+    check_and_acquire_lock_pre_scoring(git_commit=git_commit, plan_hash=plan_hash)
 
     try:
         # 3. Verify Hashes
         print("\nVerifying frozen model hashes...")
         artifacts = verify_frozen_model_hashes(expected_hashes)
 
-        # 4. Load Metadata
+        # 4. Load Metadata (FIRST AND ONLY CODE PATH OPENING AAMI DATA)
         meta_df = load_aami_cal_metadata(mat_path=mat_path)
         n_segs = len(meta_df)
         n_subjs = meta_df["subject_id"].nunique()
@@ -281,7 +337,7 @@ def score_aami_cal_test(
         probs = {}
         y_true = df_imp["y_120"].to_numpy(dtype=int)
 
-        for step in ["C0", "C1", "C2"]:
+        for step in LADDER_STEPS:
             # Logistic Regression
             art_lr = artifacts[f"{step.lower()}_lr"]
             X_lr, _ = get_feature_matrix(df_imp, step)
@@ -315,6 +371,7 @@ def score_aami_cal_test(
             paired_cis=paired_cis,
             expected_hashes=expected_hashes,
             git_commit=git_commit,
+            plan_hash=plan_hash,
         )
 
         # Finalize lock status
@@ -323,7 +380,7 @@ def score_aami_cal_test(
             f"# TEST LOCK: Study C (AAMI_Cal single evaluation)\n"
             f"Completed: {time.strftime('%Y-%m-%dT%H:%M:%S%z')}\n"
             f"Git Commit: {git_commit}\n"
-            f"Plan Hash: {EXPECTED_PLAN_C_HASH}\n"
+            f"Plan Hash: {plan_hash}\n"
             f"Status: COMPLETED_AND_PERMANENTLY_LOCKED\n",
             encoding="utf-8",
         )
@@ -342,6 +399,7 @@ def write_aami_cal_report(
     paired_cis: Dict[str, Tuple[float, float]],
     expected_hashes: Dict[str, str],
     git_commit: str,
+    plan_hash: str,
 ):
     n_segs = len(df_imp)
     n_subjs = df_imp["subject_id"].nunique()
@@ -352,8 +410,8 @@ def write_aami_cal_report(
         "# Study C Held-Out Test Evaluation: VitalDB AAMI_Cal Cohort",
         "",
         "**Date:** 2026-10-29  ",
-        "**Pre-Registration Specification:** `PLAN_C.md`  ",
-        f"**Plan Hash:** `{EXPECTED_PLAN_C_HASH}`  ",
+        "**Pre-Registration Specification:** `PLAN_C.md` (including Amendment C1)  ",
+        f"**Pre-Registered Plan Hash:** `{plan_hash}`  ",
         f"**Code Git Commit:** `{git_commit}`  ",
         "**Lock Status:** Permanently locked at `results/.test_locked_C` (Single evaluation).  ",
         "**Test Dataset:** `VitalDB_AAMI_Cal_Subset.mat` (116 subjects, 70,212 segments).  ",
@@ -382,10 +440,11 @@ def write_aami_cal_report(
     ladder_desc = {
         "C0": "Age, Sex, BMI",
         "C1": "C0 + PPG Heart Rate (hr_ibi)",
-        "C2": "C1 + HR (beat count) + IBI SD + Morphology + Quality",
+        "C2m": "C1 + Morphology Only (rise_time, pulse_width, decay_ratio)",
+        "C2": "C1 + Morphology + Quality (beat_count, is_clipped, snr_ratio, ibi_sd)",
     }
 
-    for step in ["C0", "C1", "C2"]:
+    for step in LADDER_STEPS:
         for fam, fname in [("lr", "Logistic Reg (regParam 0.01)"), ("gbt", "GBT (depth 5, iter 100)")]:
             k = f"{step}_{fam}"
             m = metrics[k]
@@ -415,18 +474,27 @@ def write_aami_cal_report(
         m1 = metrics[f"C1_{fam}"]
         m0 = metrics[f"C0_{fam}"]
         lines.append(
-            f"| **C1 vs C0 (Gain from Heart Rate)** | {fname} | "
+            f"| **C1 vs C0 (Gain from Heart Rate IBI)** | {fname} | "
             f"**{(m1['accuracy'] - m0['accuracy']) * 100.0:+.2f}%** [{d_acc_10[0] * 100.0:+.2f}%, {d_acc_10[1] * 100.0:+.2f}%] | "
             f"**{(m1['auroc'] - m0['auroc']):+.4f}** [{d_auc_10[0]:+.4f}, {d_auc_10[1]:+.4f}] | N/A |"
         )
 
-        d_acc_21 = paired_cis[f"delta_acc_C2_{fam}_minus_C1_{fam}"]
-        d_auc_21 = paired_cis[f"delta_auc_C2_{fam}_minus_C1_{fam}"]
+        d_acc_2m1 = paired_cis[f"delta_acc_C2m_{fam}_minus_C1_{fam}"]
+        d_auc_2m1 = paired_cis[f"delta_auc_C2m_{fam}_minus_C1_{fam}"]
+        m2m = metrics[f"C2m_{fam}"]
+        lines.append(
+            f"| **C2m vs C1 (Gain from Pulse Morphology Shape)** | {fname} | "
+            f"**{(m2m['accuracy'] - m1['accuracy']) * 100.0:+.2f}%** [{d_acc_2m1[0] * 100.0:+.2f}%, {d_acc_2m1[1] * 100.0:+.2f}%] | "
+            f"**{(m2m['auroc'] - m1['auroc']):+.4f}** [{d_auc_2m1[0]:+.4f}, {d_auc_2m1[1]:+.4f}] | N/A |"
+        )
+
+        d_acc_22m = paired_cis[f"delta_acc_C2_{fam}_minus_C2m_{fam}"]
+        d_auc_22m = paired_cis[f"delta_auc_C2_{fam}_minus_C2m_{fam}"]
         m2 = metrics[f"C2_{fam}"]
         lines.append(
-            f"| **C2 vs C1 (Gain from Morphology + Quality)** | {fname} | "
-            f"**{(m2['accuracy'] - m1['accuracy']) * 100.0:+.2f}%** [{d_acc_21[0] * 100.0:+.2f}%, {d_acc_21[1] * 100.0:+.2f}%] | "
-            f"**{(m2['auroc'] - m1['auroc']):+.4f}** [{d_auc_21[0]:+.4f}, {d_auc_21[1]:+.4f}] | N/A |"
+            f"| **C2 vs C2m (Gain from Signal Quality Fields)** | {fname} | "
+            f"**{(m2['accuracy'] - m2m['accuracy']) * 100.0:+.2f}%** [{d_acc_22m[0] * 100.0:+.2f}%, {d_acc_22m[1] * 100.0:+.2f}%] | "
+            f"**{(m2['auroc'] - m2m['auroc']):+.4f}** [{d_auc_22m[0]:+.4f}, {d_auc_22m[1]:+.4f}] | N/A |"
         )
 
         d_acc_20 = paired_cis[f"delta_acc_C2_{fam}_minus_C0_{fam}"]
