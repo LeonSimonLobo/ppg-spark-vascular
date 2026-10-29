@@ -4,60 +4,116 @@
 **Cohort:** `VitalDB_CalFree_Test_Subset.mat` (144 held-out subjects, 400 segments per subject, $N = 57,600$)  
 **Protocol:** PLAN_W.md (Amendments W1, W2, W3)  
 **Frozen Model SHA-256:** `92c9176b456e00630c45071afcdb1f5e0423d393ca2f6ad2ecf9357f5e640fdc`  
-**Code Git Commit:** `HEAD`  
-**Lock Status:** Test locked upon completion (`results/.test_locked_W`)  
-**Bootstrap Parameters:** 2,000 subject-level resamples, seed 42  
+**Execution Runner Commit:** `07c3d8b`  
+**Pre-Registration Amendment W3 Commit:** `a424a3b`  
+**Lock Status:** Test permanently locked (`results/.test_locked_W`)  
+**Bootstrap Parameters:** 2,000 subject-level clustered resamples across all 144 test subjects, fixed seed 42  
+**Classification Threshold:** Fixed default probability threshold of $0.50$ (frozen from model training; zero post-hoc threshold tuning)  
 
 ---
 
 ## 1. Executive Summary & Stop Rule Verdict
 
-### Verdict: CLAIM CONFIRMED
-The active claim is **CONFIRMED as a prospective within-recording association with a 10-minute calibration window on this surgical cohort**.
+### Verdict
+**The pre-registered stop rule (W3, primary endpoint) was met on the single CalFree evaluation.**
 
-- The primary prospective paired difference $\Delta\text{AUROC}(\text{Morphology} - \text{HR})$ 95% bootstrap CI strictly excludes zero: **+0.0973** [+0.0591, +0.1368].
-- Scope limitation: This confirms an intraoperative within-recording association under a documented calibration window; it is NOT claimed as general cuffless PPG-to-BP prediction across patients.
-
----
-
-## 2. Train–Test Centering Shift Disclosure
-
-> [!NOTE]
-> **Deployment Condition Tested:**  
-> The frozen morphology model was trained on development data using full-session centered features ($\Delta_{\text{full}} X = X - \text{median}_{\text{session}}(X)$) and is evaluated on CalFree using prospective prefix-centered features ($\Delta_{\text{pref}} X = X - \text{median}_{t < 60}(X)$). This represents the pre-registered prospective deployment condition being tested (a 10-minute baseline calibration window), not an independent validation of retrospective batch centering.
+- **Primary Endpoint Result:** The paired difference $\Delta\text{AUROC}(\text{Morphology} - \text{HR})$ 95% subject-level bootstrap confidence interval strictly excludes zero:
+  $$\Delta\text{AUROC} = \mathbf{+0.0973} \quad [95\%\text{ CI: } +0.0591, +0.1368]$$
+- **Scope Limitation:** This outcome indicates that pulse contour morphology timing features track acute arterial blood pressure excursions within each recording session when calibrated against a 10-minute subject baseline window in this surgical cohort. It is **NOT** a general confirmation of PPG-to-BP prediction across unseen individuals without baseline calibration.
 
 ---
 
-## 3. Primary Endpoint: Prospective Calibration (Prefix Centering)
+## 2. Primary Endpoint: Prospective Calibration (Prefix Centering)
 
-- **Calibration Baseline Window:** Segments $t \in [0, 59]$ (first 10 minutes = 60 segments per subject).
-- **Evaluation Window:** Segments $t \in [60, 399]$ (subsequent 340 segments per subject, $144 \times 340 = 48,960$ segments).
-- **Target Label:** Prospective excursion relative to prefix baseline ($y_{\text{pref}} = \mathbb{I}(SBP \ge \text{median}_{t < 60}(SBP))$).
-- **Actual Positive Prevalence:** **49.67%** (Majority baseline: 50.0%)
+- **Calibration Baseline Window:** Segments $t \in [0, 59]$ (initial 10 minutes = 60 segments per subject).
+- **Evaluation Window:** Segments $t \in [60, 399]$ (subsequent 340 segments per subject, $144 \times 340 = 48,960$ segments across all 144 test subjects).
+- **Subject Baselines:** Set strictly from prefix: $\mu_{\text{pref}}(X_i) = \text{median}_{t < 60}(X_{i, t})$.
+- **Features:** $\Delta_{\text{pref}} X_{i, t} = X_{i, t} - \mu_{\text{pref}}(X_i)$ for PPG timing features (`systolic_rise_time`, `pulse_width`, `decay_ratio`) and `hr`.
+- **Target Label:** Prospective excursion relative to prefix baseline ($y_{\text{pref}} = \mathbb{I}(SBP_{i, t} \ge \mu_{\text{pref}}(SBP_i))$, ties to 0).
+- **Actual Positive Prevalence:** **49.67%** (24,316 positive / 48,960 total segments; baseline majority rate: 50.33%).
+- **Decision Threshold:** Fixed at $p \ge 0.50$.
 
-| Model | AUROC [95% Bootstrap CI] | Accuracy (Prev: 49.7%) | Balanced Accuracy | Paired $\Delta\text{AUROC}$ vs. HR [95% CI] |
-|---|---|---|---|---|
-| **HR Comparator (Frozen)** | 0.5482 [0.5198, 0.5746] | 53.93% | 53.79% | — |
-| **Morphology (Frozen)** | **0.6455** [0.6161, 0.6747] | 60.86% | 60.85% | **+0.0973** [+0.0591, +0.1368] |
-| **Joint (HR + Morph)** | **0.6734** [0.6430, 0.7039] | 63.44% | 63.42% | **+0.1252** [+0.0927, +0.1593] |
+### Primary Endpoint Results Table
 
----
+| Model | AUROC [95% Bootstrap CI] | Balanced Accuracy | Accuracy (Prev: 49.7%) | Predicted Positive Rate (Thresh: 0.50) | Paired $\Delta\text{AUROC}$ vs. HR [95% CI] |
+|---|---|---|---|---|---|
+| **HR Comparator (Frozen)** | 0.5482 [0.5198, 0.5746] | 53.79% | 53.93% | 30.01% | — |
+| **Morphology (Frozen `w_frozen.pkl`)** | **0.6455** [0.6161, 0.6747] | **60.85%** | 60.86% | 48.56% | **+0.0973** [+0.0591, +0.1368] |
 
-## 4. Secondary Endpoint: Retrospective Full-Session Centering
-
-- **Scope:** Retrospective session-median centering across all 400 segments per subject ($N = 57,600$).
-- **Target Label:** Excursion relative to session median ($y_{\text{full}} = \mathbb{I}(SBP \ge \text{median}_{\text{session}}(SBP))$).
-- **Actual Positive Prevalence:** **50.00%** (Majority baseline: 50.0%)
-
-| Model | AUROC [95% Bootstrap CI] | Accuracy (Prev: 50.0%) | Balanced Accuracy | Paired $\Delta\text{AUROC}$ vs. HR [95% CI] |
-|---|---|---|---|---|
-| **HR Comparator (Frozen)** | 0.5460 [0.5174, 0.5734] | 53.44% | 53.44% | — |
-| **Morphology (Frozen)** | **0.6460** [0.6175, 0.6741] | 60.85% | 60.85% | **+0.0999** [+0.0631, +0.1375] |
-| **Joint (HR + Morph)** | **0.6719** [0.6423, 0.7009] | 62.82% | 62.82% | **+0.1259** [+0.0945, +0.1582] |
+*Key Primary Finding:* Morphology alone beats the heart rate comparator by $+0.0973$ AUROC, with the 95% bootstrap confidence interval lower bound ($+0.0591$) strictly exceeding zero. The predicted positive rate for morphology (48.56%) is closely aligned with the true label prevalence (49.67%), whereas the HR comparator under-predicts positives (30.01%).
 
 ---
 
-## 5. Execution Integrity & Provenance
-- All features extracted strictly from PPG Channel 1 (`Signals[:, 1, :]`). Zero ABP inputs provided.
-- Evaluated strictly once without tuning, retraining, or threshold adjustment.
-- Test permanently locked at `results/.test_locked_W`.
+## 3. Secondary Endpoint: Retrospective Full-Session Centering
+
+- **Protocol:** Demeaned by full session median across all 400 segments per subject ($N = 57,600$).
+- **Target Label:** Excursion relative to session median ($y_{\text{full}} = \mathbb{I}(SBP_{i, t} \ge \text{median}_{\text{session}}(SBP_i))$, ties to 0).
+- **Actual Positive Prevalence:** **50.00%** (28,800 positive / 57,600 total segments; baseline majority rate: 50.00%).
+- **Decision Threshold:** Fixed at $p \ge 0.50$.
+
+### Secondary Endpoint Results Table
+
+| Model | AUROC [95% Bootstrap CI] | Balanced Accuracy | Accuracy (Prev: 50.0%) | Predicted Positive Rate (Thresh: 0.50) | Paired $\Delta\text{AUROC}$ vs. HR [95% CI] |
+|---|---|---|---|---|---|
+| **HR Comparator (Frozen)** | 0.5460 [0.5174, 0.5734] | 53.44% | 53.44% | 29.73% | — |
+| **Morphology (Frozen `w_frozen.pkl`)** | **0.6460** [0.6175, 0.6741] | **60.85%** | 60.85% | 47.47% | **+0.0999** [+0.0631, +0.1375] |
+
+### Interpretation of Centering Comparison
+The prospective prefix-centered AUROC (0.6455) and retrospective full-session centered AUROC (0.6460) are very close ($\Delta = -0.0005$). This similarity demonstrates that the two centering choices produce nearly identical relative rankings on this cohort. However, this does **not** indicate an unconstrained prospective capability: prefix centering remains a within-recording design that requires an uninterrupted 10-minute baseline prefix from the same physical monitoring session.
+
+---
+
+## 4. Secondary & Exploratory Analysis: Joint Model (HR + Morphology)
+
+The joint model (`joint_frozen.pkl`, combining `delta_hr` with the three centered morphology features) was evaluated as a secondary sensitivity check:
+
+| Evaluation Setup | Joint Model AUROC [95% CI] | Joint vs. HR $\Delta\text{AUROC}$ [95% CI] | Joint vs. Morphology Alone $\Delta\text{AUROC}$ |
+|---|---|---|---|
+| **Primary (10-min Prefix)** | 0.6734 [0.6430, 0.7039] | +0.1252 [+0.0927, +0.1593] | +0.0279 (~0.028) |
+| **Secondary (Full Session)** | 0.6719 [0.6423, 0.7009] | +0.1259 [+0.0945, +0.1582] | +0.0259 (~0.026) |
+
+### Attribution of Joint Signal
+The joint model's comparison against HR alone (+0.1252) is **not** the pre-registered test. Because the HR comparator is weak (AUROC 0.5482), morphology alone accounts for the vast majority (+0.0973, ~78%) of the joint model's advantage over HR. Adding HR to morphology contributes an incremental gain of only +0.0279. The predictive signal resides predominantly in the pulse contour timing intervals, not heart rate frequency.
+
+---
+
+## 5. Complete Protocol History & Provenance
+
+To maintain full transparency, the sequence of scientific iterations leading to this evaluation is documented below:
+
+1. **Initial Pre-Registration (`PLAN.md` - Between-Subject Claim):**
+   - Originally sought to predict absolute arterial blood pressure and classify hypertension across unseen subjects using pulse transit time (PTT) and pulse arrival time (PAT).
+   - **Detector Failures (Amendments A2 & A3):** The frozen Elgendi peak detector failed validation agreement against invasive ABP beat counts (52.6% agreement vs. $\ge 80\%$ threshold under A2; 54.5% under A3 due to pulse onset boundary clipping).
+   - **Baseline Sanity Failure:** Demographic features (age, sex, BMI) achieved AUROC 0.53 on the validation split, showing negligible correlation with intraoperative catheter BP.
+   - **Test Set Cancellation (Amendment A4):** Between-subject evaluation on CalFree was formally **cancelled** to prevent evaluating a broken cross-subject model.
+2. **Re-Framing to Within-Subject Pulse Contour Tracking (`PLAN_W.md`):**
+   - Reframed the core hypothesis: Does PPG morphology track acute *within-subject* arterial pressure variations relative to a patient's own baseline, beyond heart rate alone?
+   - **Amendment W1:** Pre-registered the within-subject heart rate comparator ($\Delta HR$) and the paired subject-level bootstrap stop rule ($\Delta\text{AUROC} > 0$).
+   - **Amendment W2:** Clarified the beat agreement gate as a cohort-level quality check (all segments retained for modeling). The gate passed at 96.92% on the training split (`results/gate_within_subject_agreement.md`).
+3. **Development-Only Controls & Sensitivity Checks:**
+   - **Label Permutation:** Within-subject label shuffling collapsed all model AUROCs to 0.499, ruling out preprocessing or cross-fold data leakage.
+   - **Recording Drift:** Evaluating segment recording position alone yielded AUROC 0.500 (chance), ruling out temporal drift.
+   - **Nonlinear HR:** Gradient-boosted trees on HR alone reached AUROC 0.555, confirming linear HR was not failing simply due to model capacity.
+   - **PPG Amplitude Invariance:** Confirmed that segment amplitude range $R_{\text{PPG}} \equiv 1.0000 \pm 10^{-16}$ across all segments (zero scale variance), resolving the earlier "12.35% peak below 1.0" observation as an IEEE 754 precision artifact from MATLAB normalization.
+   - **Prospective Prefix Control:** Evaluated 10-minute prefix calibration on development data, yielding AUROC 0.675 and confirming the signal survives prospective baseline subtraction.
+4. **Pre-Registration Amendment W3:**
+   - Pre-registered the primary prefix-centered endpoint, secondary full-session endpoint, paired bootstrap difference test, and single-pass lock policy prior to touching CalFree.
+
+---
+
+## 6. Documented Limitations
+
+1. **Single Clinical Cohort:** Evaluated entirely within the VitalDB surgical and ICU dataset (derived from PulseDB). The findings have not been evaluated on an independent external dataset or ambulatory cohort.
+2. **Train–Test Centering Shift:** The frozen morphology model was trained on development features centered using full-session medians ($\Delta_{\text{full}} X$) and tested on CalFree features centered using prospective prefix medians ($\Delta_{\text{pref}} X$). While pre-registered, this represents a shifted deployment condition rather than an independent validation of retrospective centering.
+3. **Invasive Catheter Target:** The target is invasive radial/femoral arterial-line SBP under general anesthesia and operative monitoring, not non-invasive auscultatory cuff BP. Labels reflect excursions relative to each patient's baseline, not absolute blood pressure values.
+4. **Prevalence and Metric Baseline:** The within-subject classification task operates against an empirical ~50% prevalence baseline (median-split excursion), which is an easier baseline than the original 87% majority rate for absolute hypertension ($SBP \ge 130$). Consequently, balanced accuracy and AUROC are the primary metrics; raw accuracy must always be interpreted alongside the ~50% baseline rate.
+5. **Sample Size & Precision:** While the CalFree cohort contains 57,600 segments, they are clustered across 144 subjects. Subject-level bootstrap confidence intervals are reasonably wide ([+0.0591, +0.1368]), reflecting subject-to-subject heterogeneity in pulse contour coupling.
+
+---
+
+## 7. Execution Integrity & Permanent Test Lock
+
+- All CalFree features were computed strictly from PPG Channel 1 (`Signals[:, 1, :]`) via `src/features_w.py`. Zero ABP inputs were provided to the feature extractor or models.
+- The test was executed in a single un-tuned run via `src/test_w.py`.
+- Pre-scoring lock was verified before scoring, and the test is permanently locked against re-execution at `results/.test_locked_W`.
+- Zero further test runs or exploratory parameter adjustments are permitted on CalFree under protocol PLAN_W.md.
