@@ -136,3 +136,33 @@ def test_plan_c_imputer_and_ladder_matrix():
     assert "snr_ratio" not in names_c2m
     assert "systolic_rise_time" in names_c2
     assert "snr_ratio" in names_c2
+    assert "is_clipped" not in names_c2
+
+
+def test_synthetic_rise_time_0_4s_recovery():
+    """Verify that inter-peak foot definition recovers systolic rise time of 0.4 s.
+    
+    Under the legacy 300 ms search window (Amendment 0/1), rise time was capped at 0.304 s.
+    Amendment 2 searches the entire inter-peak interval [p_{k-1}, p_k], allowing full recovery
+    of true rise times > 0.304 s without window truncation.
+    """
+    fs = 125
+    n_samples = 1250  # 10.0 s
+    cycle_len = 125  # 1.0 s period (60 bpm)
+    rise_samples = 50  # 0.40 s rise time
+    decay_samples = 75  # 0.60 s decay time
+
+    single_cycle = np.zeros(cycle_len)
+    single_cycle[:rise_samples] = 0.5 * (1 - np.cos(np.pi * np.arange(rise_samples) / rise_samples))
+    single_cycle[rise_samples:] = 0.5 * (1 + np.cos(np.pi * np.arange(decay_samples) / decay_samples))
+
+    sig = np.tile(single_cycle, n_samples // cycle_len)
+    feats = extract_single_segment_features(sig, fs=fs)
+
+    assert not np.isnan(feats["systolic_rise_time"])
+    # Crucial assertion: must exceed legacy 0.304 s ceiling and recover ~0.40 s
+    assert feats["systolic_rise_time"] > 0.304
+    assert pytest.approx(feats["systolic_rise_time"], abs=0.01) == 0.40
+    assert pytest.approx(feats["pulse_width"], abs=0.01) == 0.50
+    assert pytest.approx(feats["decay_ratio"], abs=0.05) == 1.50
+
