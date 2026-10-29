@@ -96,3 +96,32 @@ Fixed settings across all comparisons; no hyperparameter tuning or search:
 3. **Pre-Scoring Lock:** A lock file `results/.test_locked_C` must be created prior to scoring `AAMI_Cal`.
 4. **Single-Pass Evaluation:** `AAMI_Cal` will be scored strictly once.
 5. **No Post-Hoc Alterations:** No feature definitions, model hyperparameters, decision thresholds, or imputation rules may be altered after `AAMI_Cal` is scored.
+
+
+---
+
+## 8. Amendments
+
+### Amendment C1 (Pre-Registered Before Any Study C Extraction or Results)
+**Date:** 2026-10-29  
+**Timing:** Decided and committed before any Study C feature extraction, data processing, model training, or results existed (no files matching `data/features_c*` or `results/dev_C*` exist).
+
+1. **Heart Rate Metric (C1):**
+   - Model **C1** is refined as **C0 + `hr_ibi`**, where:
+     $$\text{hr\_ibi} = \frac{60.0}{\text{median}(\text{IBI})}$$
+     evaluated from the median peak-to-peak inter-beat interval in seconds ($\text{IBI} = \Delta \text{peaks} / f_s$, in bpm).
+   - *Rationale:* The original integer beat count metric ($HR = n_{\text{beats}} \times 6$) is quantized in coarse 6-bpm steps across 10-second segments. `hr_ibi` provides a continuous, physiological estimate of heart rate. $n_{\text{beats}}$ remains strictly as the signal quality field `beat_count`.
+
+2. **Decay Ratio Definition Correction:**
+   - `decay_ratio` is defined strictly as implemented in the code (`src/features_w.py` and `src/features_c.py`):
+     $$\text{decay\_ratio} = \frac{d\_time}{r\_time} = \frac{t_{\text{turn}} - t_{\text{peak}}}{t_{\text{peak}} - t_{\text{foot}}}$$
+     This is a **time ratio** (diastolic decay duration divided by systolic rise duration), exactly matching Study W, rather than an amplitude ratio.
+
+3. **Refined Feature Ladder & Secondary Morphology Ablation (C2m):**
+   - **C1:** $\text{C0} + \text{`hr\_ibi`}$
+   - **C2m (Secondary Morphology Ablation):** $\text{C1} + \text{morphology only}$ (`systolic_rise_time`, `pulse_width`, `decay_ratio`), without any quality fields. This isolates the pure contribution of arterial pulse waveform geometry from signal quality artifacts.
+   - **C2 (Full Pipeline):** $\text{C1} + \text{morphology} + \text{quality fields}$ (`systolic_rise_time`, `pulse_width`, `decay_ratio`, `beat_count`, `is_clipped`, `snr_ratio`, `ibi_sd`). Here, `ibi_sd` (standard deviation of inter-beat intervals in seconds) and `beat_count` are included as quality/regularity fields.
+   - The stepwise gain is decomposed cleanly as:
+     $$\Delta \text{Gain}(\text{Morphology Shape}) = C2m - C1$$
+     $$\Delta \text{Gain}(\text{Signal Quality}) = C2 - C2m$$
+     $$\Delta \text{Gain}(\text{Total Pipeline}) = C2 - C0$$
