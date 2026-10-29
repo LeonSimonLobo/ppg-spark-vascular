@@ -102,3 +102,49 @@ Before any feature extraction or evaluation on held-out test subjects, the withi
 
 ## 10. Claim Status
 No result is claimed until produced by a script and recorded in `results/`. A null or negative result will be reported as such without alteration of the protocol.
+
+
+---
+
+## 11. Amendment W3: Pre-Registration of CalFree Test Evaluation Protocol
+
+**Date:** 2026-10-29  
+**Trigger:** Successful completion and passing of all development gates:
+1. Empirical beat agreement gate: 96.92% (PASS, $\ge 80\%$, `eba57e3`).
+2. Robustness controls: label permutation collapsed to 0.499, time drift chance at 0.500, nonlinear HR GBT at 0.555 (`8420ca1`).
+3. Prospective prefix-centering control: morphology AUROC = 0.6754, joint = 0.7027 under 10-minute prefix calibration (PASS, `b62d99d`).
+4. Amplitude-scale invariance audit: $R_{\text{PPG}} \equiv 1.0000 \pm 10^{-16}$, 0.0% peak below 0.9999; 12.35% resolved as IEEE 754 precision artifact (PASS, `b62d99d`).
+5. Frozen model hash verified: `models/w_frozen.pkl` (`92c9176b456e00630c45071afcdb1f5e0423d393ca2f6ad2ecf9357f5e640fdc`).
+
+### 11.1 Primary Endpoint (Prospective Calibration)
+- **Deployment Protocol:** Prefix-centered within-subject evaluation on held-out test subjects (`VitalDB_CalFree_Test_Subset.mat`, 144 subjects, 400 segments per subject).
+- **Calibration Prefix Window:** First 60 segments ($t \in [0, 59]$, 10 minutes) per subject used strictly to set subject baselines:
+  $$\mu_{\text{pref}}(X_i) = \text{median}_{t < 60}(X_{i, t})$$
+- **Evaluation Window:** Subsequent 340 segments ($t \in [60, 399]$, 56.7 minutes) per subject ($144 \times 340 = 48,960$ test segments).
+- **Features:** $\Delta_{\text{pref}} X_{i, t} = X_{i, t} - \mu_{\text{pref}}(X_i)$ for PPG timing features (`systolic_rise_time`, `pulse_width`, `decay_ratio`) and `hr`.
+- **Primary Target Label:** Prospective hypertensive-range excursion relative to prefix baseline:
+  $$y_{\text{pref}, i, t} = \mathbb{I}(SBP_{i, t} \ge \mu_{\text{pref}}(SBP_i)) \quad (\text{ties to } 0)$$
+- **Model and Refit/Frozen Status:** **FROZEN (zero refitting, zero tuning).** Evaluated strictly using `models/w_frozen.pkl` (SHA-256: `92c9176b456e00630c45071afcdb1f5e0423d393ca2f6ad2ecf9357f5e640fdc`), trained on the 372,240 development segments. No retraining, fine-tuning, or threshold modification is permitted.
+
+### 11.2 Secondary Endpoint (Full-Session Centering)
+- **Retrospective Setup:** Full-session median centering across all 400 segments per subject ($N = 57,600$ segments).
+- **Target Label:** Excursion relative to session median $y_{\text{full}, i, t} = \mathbb{I}(SBP_{i, t} \ge \text{median}_{\text{session}}(SBP_i))$ (ties to 0).
+- **Model:** Frozen model `models/w_frozen.pkl` evaluated on full-session centered features $\Delta_{\text{full}} X_{i, t} = X_{i, t} - \text{median}_{\text{session}}(X_i)$.
+
+### 11.3 Paired-Difference Hypothesis Test Against HR
+- **Primary Statistic:** Paired difference in AUROC:
+  $$\Delta \text{AUROC} = \text{AUROC}(\text{Morphology}) - \text{AUROC}(\text{HR})$$
+  and $\Delta \text{AUROC} = \text{AUROC}(\text{Joint}) - \text{AUROC}(\text{HR})$.
+- **Bootstrap Protocol:** Clustered subject-level bootstrap with 2,000 whole-subject resamples across all 144 test subjects, evaluated with fixed seed `42`.
+- Both morphology and HR models are evaluated on identical bootstrap resamples to form the paired difference empirical distribution and 95% percentile confidence intervals ($[2.5\%, 97.5\%]$).
+
+### 11.4 Stop Rule
+- **Existing PLAN_W Stop Rule:** The paired 95% bootstrap confidence interval of $\Delta \text{AUROC} = \text{AUROC}(\text{Morphology}) - \text{AUROC}(\text{HR})$ must strictly exclude zero with morphology exceeding HR ($\Delta \text{AUROC}_{\text{lower}} > 0$).
+- **[Added Criterion - Amendment W3]:**
+  - If the paired 95% bootstrap CI on the primary prospective endpoint (prefix-centered) strictly excludes zero on CalFree ($\Delta \text{AUROC}_{\text{lower}} > 0$), the active claim is **CONFIRMED** as a prospective within-recording association in this surgical cohort with a documented 10-minute calibration window.
+  - If the paired 95% bootstrap CI includes zero or is negative ($\Delta \text{AUROC}_{\text{lower}} \le 0$), the prospective within-subject claim is **REFUTED on the test cohort**, the run stops immediately, and the outcome is formally reported as a **development-only finding** without exploring alternative models or post-hoc refits.
+
+### 11.5 Feature Computation Code & Verification Hash
+- **PPG Input:** Evaluated strictly from PPG channel 1 (`Signals[:, 1, :]`) of `VitalDB_CalFree_Test_Subset.mat`. Zero ABP inputs are read or provided to the feature extractor.
+- **Code Provenance:** Feature extraction is executed via `src/features_w.py`, committed at `e5493d8` (and validated at `b62d99d`).
+- **Single Execution Script:** All operations (CalFree feature extraction, SHA-256 verification of `models/w_frozen.pkl`, single-pass scoring, bootstrap CIs, markdown generation to `results/test_W.md`, and creation of `results/.test_locked_W`) are bundled in `src/test_w.py`.
