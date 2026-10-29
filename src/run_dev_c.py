@@ -227,7 +227,7 @@ def generate_markdown_report(
         "C0": "Age, Sex, BMI",
         "C1": "C0 + PPG Heart Rate (hr_ibi)",
         "C2m": "C1 + Morphology Only (rise_time, pulse_width, decay_ratio)",
-        "C2": "C1 + Morphology + Quality (beat_count, is_clipped, snr_ratio, ibi_sd)",
+        "C2": "C1 + Morphology + Auxiliary Fields (beat_count, snr_ratio, ibi_sd)",
     }
 
     for step in LADDER_STEPS:
