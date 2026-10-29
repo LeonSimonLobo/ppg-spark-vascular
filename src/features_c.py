@@ -3,11 +3,12 @@
 Features are extracted strictly from the single 10-s PPG segment and patient demographics.
 No per-subject normalization, centering, or transduction is applied.
 
-Feature Ladder:
+Feature Ladder (Amendment C1):
 - C0: Demographics (age, sex, bmi)
 - C1: C0 + PPG heart rate from inter-beat interval (hr_ibi)
-- C2: C1 + PPG rate (hr) + IBI variability (ibi_sd) + morphology features (systolic_rise_time, pulse_width, decay_ratio)
-      + quality fields (beat_count, is_clipped, snr_ratio)
+- C2m: C1 + morphology only (systolic_rise_time, pulse_width, decay_ratio)
+- C2: C1 + morphology + quality fields (systolic_rise_time, pulse_width, decay_ratio,
+      beat_count, is_clipped, snr_ratio, ibi_sd)
 
 Missing values are imputed using training-set medians accompanied by binary missingness indicators.
 No rows are dropped.
@@ -27,15 +28,19 @@ from src.fiducials import detect_peaks_elgendi
 # Canonical feature column lists
 C0_COLS = ["age", "sex", "bmi"]
 C1_COLS = C0_COLS + ["hr_ibi"]
+C2m_COLS = C1_COLS + [
+    "systolic_rise_time",
+    "pulse_width",
+    "decay_ratio",
+]
 C2_COLS = C1_COLS + [
-    "hr",
-    "ibi_sd",
     "systolic_rise_time",
     "pulse_width",
     "decay_ratio",
     "beat_count",
     "is_clipped",
     "snr_ratio",
+    "ibi_sd",
 ]
 
 ALL_EXTRACTED_COLS = [
@@ -108,10 +113,10 @@ def extract_single_segment_features(
             "snr_ratio": snr_ratio,
         }
 
-    # Heart rate from beat count (beats in segment x 6)
+    # Heart rate from beat count (coarse n_pks x 6)
     hr = float(n_pks * 6.0)
 
-    # Inter-beat interval (IBI) metrics
+    # Continuous heart rate from median IBI and IBI standard deviation
     if n_pks >= 2:
         ibi_sec = np.diff(peaks) / float(fs)
         med_ibi = float(np.median(ibi_sec))
@@ -180,7 +185,7 @@ def extract_single_segment_features(
             if t_asc is not None and t_desc is not None and t_desc > t_asc:
                 pw = (t_desc - t_asc) / fs
 
-        # Decay ratio
+        # Decay ratio: time ratio (decay duration / rise duration)
         d_ratio = (d_time / r_time) if r_time > 0 else np.nan
 
         if r_time > 0:
@@ -311,7 +316,7 @@ def get_feature_matrix(
     df : pd.DataFrame
         Transformed DataFrame containing features and `is_missing_*` indicator columns.
     ladder_step : str
-        'C0', 'C1', or 'C2'.
+        'C0', 'C1', 'C2m', or 'C2'.
 
     Returns
     -------
@@ -322,10 +327,12 @@ def get_feature_matrix(
         base_cols = list(C0_COLS)
     elif ladder_step == "C1":
         base_cols = list(C1_COLS)
+    elif ladder_step == "C2m":
+        base_cols = list(C2m_COLS)
     elif ladder_step == "C2":
         base_cols = list(C2_COLS)
     else:
-        raise ValueError(f"Unknown ladder step: {ladder_step}. Expected 'C0', 'C1', or 'C2'.")
+        raise ValueError(f"Unknown ladder step: {ladder_step}. Expected 'C0', 'C1', 'C2m', or 'C2'.")
 
     # Include base cols + their corresponding missingness indicator columns
     cols_to_use = []
