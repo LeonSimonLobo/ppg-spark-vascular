@@ -89,6 +89,7 @@ def test_clustered_subject_bootstrap_metrics():
     prob_dict = {
         "C0_lr": np.full(len(df), 0.4),
         "C1_lr": np.where(y_true == 1, 0.7, 0.3),
+        "C2m_lr": np.where(y_true == 1, 0.75, 0.25),
         "C2_lr": np.where(y_true == 1, 0.8, 0.2),
     }
 
@@ -98,7 +99,12 @@ def test_clustered_subject_bootstrap_metrics():
 
     assert "C0_lr" in model_cis
     assert "C1_lr" in model_cis
+    assert "C2m_lr" in model_cis
     assert "C2_lr" in model_cis
+    assert "delta_acc_C2m_lr_minus_C1_lr" in paired_cis
+    assert "delta_auc_C2m_lr_minus_C1_lr" in paired_cis
+    assert "delta_acc_C2_lr_minus_C2m_lr" in paired_cis
+    assert "delta_auc_C2_lr_minus_C2m_lr" in paired_cis
     assert "delta_acc_C2_lr_minus_C0_lr" in paired_cis
     assert "delta_auc_C2_lr_minus_C0_lr" in paired_cis
 
@@ -118,6 +124,8 @@ def test_cv_and_freezing(tmp_path):
     assert len(fold_metrics) == 3
     assert "C0_lr" in pooled_metrics
     assert "C1_lr" in pooled_metrics
+    assert "C2m_lr" in pooled_metrics
+    assert "C2m_gbt" in pooled_metrics
     assert "C2_gbt" in pooled_metrics
     assert 0.0 <= pooled_metrics["C2_gbt"]["accuracy"] <= 1.0
 
@@ -128,6 +136,8 @@ def test_cv_and_freezing(tmp_path):
 
     assert "C0_lr" in frozen_dict
     assert "C1_lr" in frozen_dict
+    assert "C2m_lr" in frozen_dict
+    assert "C2m_gbt" in frozen_dict
     assert "C2_gbt" in frozen_dict
     path, sha = frozen_dict["C2_gbt"]
     assert len(sha) == 64

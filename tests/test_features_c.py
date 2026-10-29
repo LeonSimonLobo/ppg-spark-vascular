@@ -11,6 +11,7 @@ from src.features_c import (
     get_feature_matrix,
     C0_COLS,
     C1_COLS,
+    C2m_COLS,
     C2_COLS,
 )
 
@@ -119,14 +120,19 @@ def test_plan_c_imputer_and_ladder_matrix():
     # Test ladder matrices
     X_c0, names_c0 = get_feature_matrix(df_imputed, "C0")
     X_c1, names_c1 = get_feature_matrix(df_imputed, "C1")
+    X_c2m, names_c2m = get_feature_matrix(df_imputed, "C2m")
     X_c2, names_c2 = get_feature_matrix(df_imputed, "C2")
 
     assert X_c0.shape[0] == 3
     assert X_c1.shape[0] == 3
+    assert X_c2m.shape[0] == 3
     assert X_c2.shape[0] == 3
 
-    assert X_c0.shape[1] < X_c1.shape[1] < X_c2.shape[1]
+    assert X_c0.shape[1] < X_c1.shape[1] < X_c2m.shape[1] < X_c2.shape[1]
     assert "age" in names_c0
     assert "hr_ibi" in names_c1
+    assert "systolic_rise_time" in names_c2m
+    assert "decay_ratio" in names_c2m
+    assert "snr_ratio" not in names_c2m
     assert "systolic_rise_time" in names_c2
     assert "snr_ratio" in names_c2

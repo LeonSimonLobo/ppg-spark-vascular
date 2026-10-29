@@ -100,7 +100,7 @@ def verify_preflight_gates(
 
     actual_plan_hash = hashlib.sha256(plan_p.read_bytes()).hexdigest()
 
-    match_plan_hash = re.search(r"Pre-Registered Plan Hash:\s*`([a-f0-9]{64})`", dev_content)
+    match_plan_hash = re.search(r"Pre-Registered Plan Hash:\*{0,2}\s*`([a-f0-9]{64})`", dev_content)
     if not match_plan_hash:
         raise ValueError(
             f"PRE-FLIGHT GATE 3 FAILED: No pre-registered plan hash found in {dev_report_path}!"
@@ -159,12 +159,16 @@ def verify_preflight_gates(
     return expected_hashes
 
 
-def check_and_acquire_lock_pre_scoring(git_commit: str = "HEAD", plan_hash: str = "") -> None:
+def check_and_acquire_lock_pre_scoring(
+    lock_path: str = LOCK_FILE_PATH,
+    git_commit: str = "HEAD",
+    plan_hash: str = "",
+) -> None:
     """Acquire test lock BEFORE any test data is opened. Aborts if already locked."""
-    lock_p = Path(LOCK_FILE_PATH)
+    lock_p = Path(lock_path)
     if lock_p.exists():
         raise RuntimeError(
-            f"Test execution is LOCKED by existing {LOCK_FILE_PATH}! "
+            f"Test execution is LOCKED by existing {lock_path}! "
             "A test run has already occurred or is locked against repeated evaluations."
         )
 
@@ -176,7 +180,7 @@ def check_and_acquire_lock_pre_scoring(git_commit: str = "HEAD", plan_hash: str 
         f"Status: SCORING_IN_PROGRESS\n"
     )
     lock_p.write_text(lock_content, encoding="utf-8")
-    print(f"Acquired pre-scoring lock at {LOCK_FILE_PATH}")
+    print(f"Acquired pre-scoring lock at {lock_path}")
 
 
 def verify_frozen_model_hashes(expected_hashes: Dict[str, str]) -> Dict[str, Any]:
@@ -245,6 +249,9 @@ def load_aami_cal_metadata(mat_path: str = MAT_PATH) -> pd.DataFrame:
 def score_aami_cal_test(
     mat_path: str = MAT_PATH,
     output_report: str = REPORT_PATH,
+    dev_report_path: str = DEV_REPORT_PATH,
+    plan_path: str = PLAN_FILE_PATH,
+    lock_path: str = LOCK_FILE_PATH,
     n_boot: int = 2000,
     seed: int = 42,
     git_commit: str = "HEAD",
@@ -255,13 +262,18 @@ def score_aami_cal_test(
     print("=" * 70)
 
     # 1. Execute Pre-Flight Gates
-    expected_hashes = verify_preflight_gates()
+    expected_hashes = verify_preflight_gates(
+        dev_report_path=dev_report_path,
+        plan_file_path=plan_path,
+        test_report_path=output_report,
+        lock_file_path=lock_path,
+    )
 
-    plan_path = Path(PLAN_FILE_PATH)
-    plan_hash = hashlib.sha256(plan_path.read_bytes()).hexdigest()
+    plan_p = Path(plan_path)
+    plan_hash = hashlib.sha256(plan_p.read_bytes()).hexdigest()
 
     # 2. Acquire Pre-Scoring Lock
-    check_and_acquire_lock_pre_scoring(git_commit=git_commit, plan_hash=plan_hash)
+    check_and_acquire_lock_pre_scoring(lock_path=lock_path, git_commit=git_commit, plan_hash=plan_hash)
 
     try:
         # 3. Verify Hashes
