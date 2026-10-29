@@ -3,13 +3,14 @@
 Features are extracted strictly from the single 10-s PPG segment and patient demographics.
 No per-subject normalization, centering, or transduction is applied.
 
-Feature Ladder (Amendment C1):
+Feature Ladder (Amendment C1 & C2):
 - C0: Demographics (age, sex, bmi)
 - C1: C0 + PPG heart rate from inter-beat interval (hr_ibi)
 - C2m: C1 + morphology only (systolic_rise_time, pulse_width, decay_ratio)
-- C2: C1 + morphology + quality fields (systolic_rise_time, pulse_width, decay_ratio,
-      beat_count, is_clipped, snr_ratio, ibi_sd)
+- C2: C1 + morphology + auxiliary segment fields (systolic_rise_time, pulse_width, decay_ratio,
+      beat_count, snr_ratio, ibi_sd)
 
+Note: is_clipped is identically 0.0 across all cohorts and is excluded from model features.
 Missing values are imputed using training-set medians accompanied by binary missingness indicators.
 No rows are dropped.
 """
@@ -38,7 +39,6 @@ C2_COLS = C1_COLS + [
     "pulse_width",
     "decay_ratio",
     "beat_count",
-    "is_clipped",
     "snr_ratio",
     "ibi_sd",
 ]
@@ -126,74 +126,75 @@ def extract_single_segment_features(
         hr_ibi = np.nan
         ibi_sd = np.nan
 
-    # 4. Morphology features
-    w_foot = int(round(0.3 * fs))  # 300 ms preceding peak
+    # 4. Morphology features (Amendment C2: Inter-Peak Foot Definition)
     rise_times = []
     pulse_widths = []
     decay_ratios = []
 
-    for k in range(n_pks):
+    # Beat k requires a preceding peak k-1 and following peak k+1
+    for k in range(1, n_pks - 1):
         pk = peaks[k]
+        pk_prev = peaks[k - 1]
+        pk_next = peaks[k + 1]
 
-        # Foot: minimum in 300 ms preceding peak
-        start_foot = max(0, pk - w_foot)
-        window_foot = ppg[start_foot : pk + 1]
-        min_foot_val = np.min(window_foot)
-        foot_ties = np.where(window_foot <= min_foot_val + 1e-9)[0]
-        foot = start_foot + int(foot_ties[-1])
+        ibi_prev_sec = (pk - pk_prev) / float(fs)
+        ibi_next_sec = (pk_next - pk) / float(fs)
 
-        # Turning point: minimum between peak and next peak
-        if k < n_pks - 1:
-            turn_end = peaks[k + 1]
-        else:
-            turn_end = min(len(ppg) - 1, pk + int(round(0.6 * fs)))
+        # Qualification criterion: both intervals must be between 0.4 s and 1.5 s
+        if not (0.4 <= ibi_prev_sec <= 1.5 and 0.4 <= ibi_next_sec <= 1.5):
+            continue
 
-        if turn_end > pk:
-            window_turn = ppg[pk : turn_end + 1]
-            min_turn_val = np.min(window_turn)
-            turn_ties = np.where(window_turn <= min_turn_val + 1e-9)[0]
-            turn = pk + int(turn_ties[0])
-        else:
-            turn = pk
+        # foot_k = argmin of PPG between pk_prev and pk
+        window_prev = ppg[pk_prev : pk + 1]
+        min_prev_val = np.min(window_prev)
+        ties_prev = np.where(window_prev <= min_prev_val + 1e-9)[0]
+        foot_k = pk_prev + int(ties_prev[-1])
 
-        r_time = (pk - foot) / fs
-        d_time = (turn - pk) / fs
+        # foot_{k+1} = argmin of PPG between pk and pk_next
+        window_next = ppg[pk : pk_next + 1]
+        min_next_val = np.min(window_next)
+        ties_next = np.where(window_next <= min_next_val + 1e-9)[0]
+        foot_next = pk + int(ties_next[0])
 
-        y_foot = ppg[foot]
-        y_pk = ppg[pk]
-        h = y_pk - y_foot
+        r_time = (pk - foot_k) / float(fs)
+        d_time = (foot_next - pk) / float(fs)
+
+        if r_time <= 0 or d_time <= 0:
+            continue
+
+        # Decay ratio: decay duration / rise duration
+        d_ratio = d_time / r_time
 
         # Pulse width at 50% amplitude (FWHM)
+        y_foot = ppg[foot_k]
+        y_pk = ppg[pk]
+        h = y_pk - y_foot
         pw = np.nan
-        if h > 1e-4 and r_time > 0 and d_time > 0:
+
+        if h > 1e-4:
             y50 = y_foot + 0.5 * h
 
-            # Ascending 50% crossing
+            # Ascending 50% crossing in [foot_k, pk]
             t_asc = None
-            for m in range(foot, pk):
+            for m in range(foot_k, pk):
                 if ppg[m] <= y50 <= ppg[m + 1] and (ppg[m + 1] > ppg[m]):
                     t_asc = m + (y50 - ppg[m]) / (ppg[m + 1] - ppg[m])
                     break
 
-            # Descending 50% crossing
+            # Descending 50% crossing in [pk, foot_next]
             t_desc = None
-            for m in range(pk, turn):
+            for m in range(pk, foot_next):
                 if ppg[m] >= y50 >= ppg[m + 1] and (ppg[m] > ppg[m + 1]):
                     t_desc = m + (y50 - ppg[m]) / (ppg[m + 1] - ppg[m])
                     break
 
             if t_asc is not None and t_desc is not None and t_desc > t_asc:
-                pw = (t_desc - t_asc) / fs
+                pw = (t_desc - t_asc) / float(fs)
 
-        # Decay ratio: time ratio (decay duration / rise duration)
-        d_ratio = (d_time / r_time) if r_time > 0 else np.nan
-
-        if r_time > 0:
-            rise_times.append(r_time)
+        rise_times.append(r_time)
+        decay_ratios.append(d_ratio)
         if not np.isnan(pw):
             pulse_widths.append(pw)
-        if not np.isnan(d_ratio):
-            decay_ratios.append(d_ratio)
 
     med_rise = float(np.median(rise_times)) if len(rise_times) > 0 else np.nan
     med_pw = float(np.median(pulse_widths)) if len(pulse_widths) > 0 else np.nan
