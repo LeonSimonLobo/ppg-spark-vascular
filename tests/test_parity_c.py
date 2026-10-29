@@ -21,13 +21,15 @@ def run_parity_comparison(n_samples: int = 2000, seed: int = 42, report_path: st
     assert Path(input_parquet).exists(), f"{input_parquet} not found!"
 
     print(f"[Parity Test] Loading {n_samples} random segments from {input_parquet} (seed={seed})...")
-    table = pq.read_table(input_parquet)
-    total_rows = len(table)
+    pf = pq.ParquetFile(input_parquet)
+    # Read first row group (20,000 segments) to avoid 2.5 GB whole-table memory allocation
+    rg = pf.read_row_group(0)
+    total_in_rg = len(rg)
 
     rng = np.random.default_rng(seed)
-    sample_indices = rng.choice(total_rows, size=n_samples, replace=False)
+    sample_indices = rng.choice(total_in_rg, size=n_samples, replace=False)
     sample_indices.sort()
-    sample_table = table.take(sample_indices)
+    sample_table = rg.take(sample_indices)
     sample_df = sample_table.to_pandas()
 
     # 1. NumPy Path
