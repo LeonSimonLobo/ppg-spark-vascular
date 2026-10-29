@@ -4,8 +4,8 @@ Models (Amendment C1 Ladder):
 - C0: Demographics baseline (age, sex, bmi)
 - C1: Demographics + Heart Rate from IBI (age, sex, bmi, hr_ibi)
 - C2m: C1 + morphology only (systolic_rise_time, pulse_width, decay_ratio)
-- C2: C1 + morphology + quality fields (systolic_rise_time, pulse_width, decay_ratio,
-      beat_count, is_clipped, snr_ratio, ibi_sd)
+- C2: C1 + morphology + auxiliary segment fields (systolic_rise_time, pulse_width, decay_ratio,
+      beat_count, snr_ratio, ibi_sd)
 
 Model Architectures (fixed settings, zero tuning):
 - Logistic Regression: regParam 0.01 (C = 100.0, l2 penalty), StandardScaler fit on train fold
