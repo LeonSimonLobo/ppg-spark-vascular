@@ -26,9 +26,9 @@
 | **`hr_ibi`** | Feature | 0 | 0.00% | `0.00e+00` | `0.00e+00` | **PASS** |
 | **`hr`** | Feature | 0 | 0.00% | `0.00e+00` | `0.00e+00` | **PASS** |
 | **`ibi_sd`** | Feature | 0 | 0.00% | `0.00e+00` | `0.00e+00` | **PASS** |
-| **`systolic_rise_time`** | Feature | 0 | 0.00% | `0.00e+00` | `0.00e+00` | **PASS** |
-| **`pulse_width`** | Feature | 0 | 0.00% | `0.00e+00` | `0.00e+00` | **PASS** |
-| **`decay_ratio`** | Feature | 0 | 0.00% | `0.00e+00` | `0.00e+00` | **PASS** |
+| **`systolic_rise_time`** | Feature | 2 | 0.10% | `0.00e+00` | `0.00e+00` | **PASS** |
+| **`pulse_width`** | Feature | 2 | 0.10% | `0.00e+00` | `0.00e+00` | **PASS** |
+| **`decay_ratio`** | Feature | 2 | 0.10% | `0.00e+00` | `0.00e+00` | **PASS** |
 | **`beat_count`** | Feature | 0 | 0.00% | `0.00e+00` | `0.00e+00` | **PASS** |
 | **`is_clipped`** | Feature | 0 | 0.00% | `0.00e+00` | `0.00e+00` | **PASS** |
 | **`snr_ratio`** | Feature | 0 | 0.00% | `0.00e+00` | `0.00e+00` | **PASS** |

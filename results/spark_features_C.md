@@ -12,8 +12,8 @@
 
 | Cohort Identifier | Input Parquet | Output Parquet | Total Rows | Unique Subjects | Elapsed Time (s) | Throughput (rows/s) |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`train_file`** | `data/parquet/train_file.parquet` | `data\features_c\train_file.parquet` | **465,480** | **1,293** | **92.64s** | **5024.8** |
-| **`calfree_test`** | `data/parquet/calfree_test.parquet` | `data\features_c\calfree_test.parquet` | **57,600** | **144** | **52.05s** | **1106.7** |
+| **`train_file`** | `data/parquet/train_file.parquet` | `data\features_c\train_file.parquet` | **465,480** | **1,293** | **92.24s** | **5046.5** |
+| **`calfree_test`** | `data/parquet/calfree_test.parquet` | `data\features_c\calfree_test.parquet` | **57,600** | **144** | **48.54s** | **1186.6** |
 
 ---
 
@@ -24,9 +24,9 @@
 | **`hr_ibi`** | 0.00% | 0.00% | Kept as NaN (PlanCImputer training-median imputation) |
 | **`hr`** | 0.00% | 0.00% | Kept as NaN (PlanCImputer training-median imputation) |
 | **`ibi_sd`** | 0.00% | 0.00% | Kept as NaN (PlanCImputer training-median imputation) |
-| **`systolic_rise_time`** | 0.00% | 0.00% | Kept as NaN (PlanCImputer training-median imputation) |
-| **`pulse_width`** | 0.00% | 0.00% | Kept as NaN (PlanCImputer training-median imputation) |
-| **`decay_ratio`** | 0.00% | 0.00% | Kept as NaN (PlanCImputer training-median imputation) |
+| **`systolic_rise_time`** | 0.03% | 0.18% | Kept as NaN (PlanCImputer training-median imputation) |
+| **`pulse_width`** | 0.03% | 0.18% | Kept as NaN (PlanCImputer training-median imputation) |
+| **`decay_ratio`** | 0.03% | 0.18% | Kept as NaN (PlanCImputer training-median imputation) |
 | **`beat_count`** | 0.00% | 0.00% | Kept as NaN (PlanCImputer training-median imputation) |
 | **`is_clipped`** | 0.00% | 0.00% | Kept as NaN (PlanCImputer training-median imputation) |
 | **`snr_ratio`** | 0.00% | 0.00% | Kept as NaN (PlanCImputer training-median imputation) |
