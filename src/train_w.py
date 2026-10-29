@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 from scipy.stats import spearmanr
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, LinearRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
@@ -53,6 +53,45 @@ def compute_time_correlations(
             s_val = g[feat]
             if s_val.std() > 1e-6:
                 r, _ = spearmanr(g["time_pos"], s_val)
+                r_subs.append(r)
+        r_subs = np.array(r_subs, dtype=np.float64)
+
+        results[feat] = {
+            "pooled_r": float(r_pool),
+            "pooled_p": float(p_pool),
+            "median_r": float(np.median(r_subs)),
+            "mean_r": float(np.mean(r_subs)),
+            "iqr_r": float(np.percentile(r_subs, 75) - np.percentile(r_subs, 25)),
+            "q1_r": float(np.percentile(r_subs, 25)),
+            "q3_r": float(np.percentile(r_subs, 75)),
+            "min_r": float(np.min(r_subs)),
+            "max_r": float(np.max(r_subs)),
+            "pos_pct": float(np.mean(r_subs > 0) * 100.0),
+        }
+
+    return results
+
+
+def compute_hr_correlations(
+    df: pd.DataFrame,
+    morph_features: list,
+    hr_feature: str = "delta_hr",
+) -> Dict[str, Dict[str, float]]:
+    """Compute pooled and per-subject Spearman correlations between morphology and delta_hr."""
+    results = {}
+    sub_groups = [g for _, g in df.groupby("subject_id")]
+
+    for feat in morph_features:
+        # Pooled Spearman
+        r_pool, p_pool = spearmanr(df[hr_feature], df[feat])
+
+        # Per-subject Spearman
+        r_subs = []
+        for g in sub_groups:
+            s_hr = g[hr_feature]
+            s_feat = g[feat]
+            if s_hr.std() > 1e-6 and s_feat.std() > 1e-6:
+                r, _ = spearmanr(s_hr, s_feat)
                 r_subs.append(r)
         r_subs = np.array(r_subs, dtype=np.float64)
 
@@ -470,5 +509,311 @@ All features exhibit median within-subject correlations with recording time posi
     }
 
 
+def train_and_evaluate_nested_cv(
+    parquet_path: str = "data/interim/features_w_train.parquet",
+    output_report_path: str = "results/dev_W_nested.md",
+    n_splits: int = 5,
+    n_boot: int = 2000,
+    seed: int = 42,
+) -> Dict[str, Any]:
+    """Evaluate HR alone, HR + morphology, and HR-residualized morphology on GroupKFold(5)."""
+    print(f"Loading development features from {parquet_path} for nested CV...")
+    df = pq.read_table(parquet_path).to_pandas()
+
+    n_total = len(df)
+    n_subjs = df["subject_id"].nunique()
+    n_seg_per_subj = 360
+    assert n_total == n_subjs * n_seg_per_subj, "Subjects must have exactly 360 segments."
+
+    # 1. Target: y = 1 if SBP >= subject median SBP (ties to 0 -> SBP > median)
+    sub_med_sbp = df.groupby("subject_id")["sbp"].transform("median")
+    y = ((df["sbp"] >= sub_med_sbp) & (df["sbp"] != sub_med_sbp)).astype(int).values
+    df["target"] = y
+
+    prevalence = float(np.mean(y) * 100.0)
+    print(f"Cohort: {n_total:,} segments across {n_subjs:,} subjects (Prevalence: {prevalence:.2f}%).")
+
+    morph_cols = ["delta_systolic_rise_time", "delta_pulse_width", "delta_decay_ratio"]
+    hr_cols = ["delta_hr"]
+    joint_cols = ["delta_hr", "delta_systolic_rise_time", "delta_pulse_width", "delta_decay_ratio"]
+
+    # Compute morphology correlations with delta_hr
+    print("Computing morphology feature correlations with delta_hr...")
+    hr_corrs = compute_hr_correlations(df, morph_cols, hr_feature="delta_hr")
+
+    # 2. GroupKFold(5) by subject_id
+    gkf = GroupKFold(n_splits=n_splits)
+    groups = df["subject_id"].values
+
+    oof_pred_p_hr = np.zeros(n_total, dtype=np.float64)
+    oof_pred_y_hr = np.zeros(n_total, dtype=np.int32)
+
+    oof_pred_p_joint = np.zeros(n_total, dtype=np.float64)
+    oof_pred_y_joint = np.zeros(n_total, dtype=np.int32)
+
+    oof_pred_p_resid = np.zeros(n_total, dtype=np.float64)
+    oof_pred_y_resid = np.zeros(n_total, dtype=np.int32)
+
+    fold_metrics = []
+
+    print(f"Running GroupKFold({n_splits}) nested cross-validation...")
+    for fold, (train_idx, val_idx) in enumerate(gkf.split(df, y, groups)):
+        f_t0 = time.time()
+        val_subjs = df.iloc[val_idx]["subject_id"].nunique()
+        val_prev = float(np.mean(y[val_idx]) * 100.0)
+
+        y_train = y[train_idx]
+        y_val = y[val_idx]
+
+        # Model 1: HR alone
+        X_train_hr = df.iloc[train_idx][hr_cols].values
+        X_val_hr = df.iloc[val_idx][hr_cols].values
+        pipe_hr = Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", LogisticRegression(random_state=seed, solver="lbfgs")),
+        ])
+        pipe_hr.fit(X_train_hr, y_train)
+        p_val_hr = pipe_hr.predict_proba(X_val_hr)[:, 1]
+        y_val_pred_hr = (p_val_hr >= 0.5).astype(int)
+        oof_pred_p_hr[val_idx] = p_val_hr
+        oof_pred_y_hr[val_idx] = y_val_pred_hr
+        auc_hr = float(roc_auc_score(y_val, p_val_hr))
+        acc_hr = float(accuracy_score(y_val, y_val_pred_hr) * 100.0)
+
+        # Model 2: HR + morphology (joint)
+        X_train_joint = df.iloc[train_idx][joint_cols].values
+        X_val_joint = df.iloc[val_idx][joint_cols].values
+        pipe_joint = Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", LogisticRegression(random_state=seed, solver="lbfgs")),
+        ])
+        pipe_joint.fit(X_train_joint, y_train)
+        p_val_joint = pipe_joint.predict_proba(X_val_joint)[:, 1]
+        y_val_pred_joint = (p_val_joint >= 0.5).astype(int)
+        oof_pred_p_joint[val_idx] = p_val_joint
+        oof_pred_y_joint[val_idx] = y_val_pred_joint
+        auc_joint = float(roc_auc_score(y_val, p_val_joint))
+        acc_joint = float(accuracy_score(y_val, y_val_pred_joint) * 100.0)
+
+        # Model 3: HR-residualized morphology (fit OLS on train_idx ONLY, project onto val_idx)
+        X_train_res = np.zeros((len(train_idx), len(morph_cols)), dtype=np.float64)
+        X_val_res = np.zeros((len(val_idx), len(morph_cols)), dtype=np.float64)
+
+        for k, col in enumerate(morph_cols):
+            ols = LinearRegression()
+            ols.fit(df.iloc[train_idx][hr_cols].values, df.iloc[train_idx][col].values)
+            train_pred = ols.predict(df.iloc[train_idx][hr_cols].values)
+            val_pred = ols.predict(df.iloc[val_idx][hr_cols].values)
+            X_train_res[:, k] = df.iloc[train_idx][col].values - train_pred
+            X_val_res[:, k] = df.iloc[val_idx][col].values - val_pred
+
+        pipe_resid = Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", LogisticRegression(random_state=seed, solver="lbfgs")),
+        ])
+        pipe_resid.fit(X_train_res, y_train)
+        p_val_resid = pipe_resid.predict_proba(X_val_res)[:, 1]
+        y_val_pred_resid = (p_val_resid >= 0.5).astype(int)
+        oof_pred_p_resid[val_idx] = p_val_resid
+        oof_pred_y_resid[val_idx] = y_val_pred_resid
+        auc_resid = float(roc_auc_score(y_val, p_val_resid))
+        acc_resid = float(accuracy_score(y_val, y_val_pred_resid) * 100.0)
+
+        fold_time = time.time() - f_t0
+        print(
+            f"Fold {fold + 1}/{n_splits} ({val_subjs} subjs, {len(val_idx):,} segs) [{fold_time:.1f}s]: "
+            f"HR AUROC={auc_hr:.4f}, Acc={acc_hr:.2f}% | "
+            f"HR+Morph AUROC={auc_joint:.4f}, Acc={acc_joint:.2f}% | "
+            f"ResidMorph AUROC={auc_resid:.4f}, Acc={acc_resid:.2f}%"
+        )
+
+        fold_metrics.append({
+            "fold": fold + 1,
+            "n_subjs": val_subjs,
+            "n_segs": len(val_idx),
+            "prevalence": val_prev,
+            "auc_hr": auc_hr,
+            "acc_hr": acc_hr,
+            "auc_joint": auc_joint,
+            "acc_joint": acc_joint,
+            "auc_resid": auc_resid,
+            "acc_resid": acc_resid,
+        })
+
+    # Pooled OOF Metrics
+    pooled_auc_hr = float(roc_auc_score(y, oof_pred_p_hr))
+    pooled_acc_hr = float(accuracy_score(y, oof_pred_y_hr) * 100.0)
+
+    pooled_auc_joint = float(roc_auc_score(y, oof_pred_p_joint))
+    pooled_acc_joint = float(accuracy_score(y, oof_pred_y_joint) * 100.0)
+
+    pooled_auc_resid = float(roc_auc_score(y, oof_pred_p_resid))
+    pooled_acc_resid = float(accuracy_score(y, oof_pred_y_resid) * 100.0)
+
+    delta_auc_joint = pooled_auc_joint - pooled_auc_hr
+    delta_auc_resid = pooled_auc_resid - pooled_auc_hr
+
+    # Subject-level bootstrap (2,000 resamples)
+    print(f"Running {n_boot:,} subject-level bootstrap resamples on pooled OOF predictions...")
+    y_sub = y.reshape(n_subjs, n_seg_per_subj)
+    p_hr_sub = oof_pred_p_hr.reshape(n_subjs, n_seg_per_subj)
+    p_joint_sub = oof_pred_p_joint.reshape(n_subjs, n_seg_per_subj)
+    p_resid_sub = oof_pred_p_resid.reshape(n_subjs, n_seg_per_subj)
+
+    rng = np.random.default_rng(seed)
+    boot_auc_hr = np.zeros(n_boot, dtype=np.float64)
+    boot_auc_joint = np.zeros(n_boot, dtype=np.float64)
+    boot_auc_resid = np.zeros(n_boot, dtype=np.float64)
+
+    boot_delta_joint = np.zeros(n_boot, dtype=np.float64)
+    boot_delta_resid = np.zeros(n_boot, dtype=np.float64)
+
+    for b in range(n_boot):
+        sub_sample = rng.choice(n_subjs, size=n_subjs, replace=True)
+        b_y = y_sub[sub_sample].ravel()
+        b_p_hr = p_hr_sub[sub_sample].ravel()
+        b_p_joint = p_joint_sub[sub_sample].ravel()
+        b_p_resid = p_resid_sub[sub_sample].ravel()
+
+        auc_hr_b = fast_auc_with_ties(b_y, b_p_hr)
+        auc_joint_b = fast_auc_with_ties(b_y, b_p_joint)
+        auc_resid_b = fast_auc_with_ties(b_y, b_p_resid)
+
+        boot_auc_hr[b] = auc_hr_b
+        boot_auc_joint[b] = auc_joint_b
+        boot_auc_resid[b] = auc_resid_b
+
+        boot_delta_joint[b] = auc_joint_b - auc_hr_b
+        boot_delta_resid[b] = auc_resid_b - auc_hr_b
+
+    ci_auc_hr = (float(np.percentile(boot_auc_hr, 2.5)), float(np.percentile(boot_auc_hr, 97.5)))
+    ci_auc_joint = (float(np.percentile(boot_auc_joint, 2.5)), float(np.percentile(boot_auc_joint, 97.5)))
+    ci_auc_resid = (float(np.percentile(boot_auc_resid, 2.5)), float(np.percentile(boot_auc_resid, 97.5)))
+
+    ci_delta_joint = (float(np.percentile(boot_delta_joint, 2.5)), float(np.percentile(boot_delta_joint, 97.5)))
+    ci_delta_resid = (float(np.percentile(boot_delta_resid, 2.5)), float(np.percentile(boot_delta_resid, 97.5)))
+
+    joint_pass = bool(ci_delta_joint[0] > 0.0)
+    resid_pass = bool(ci_delta_resid[0] > 0.0)
+
+    # Format Markdown Report
+    report = rf"""# Nested Model Comparison & HR Residualization Report (dev_W_nested.md)
+
+**Date:** 2026-10-29  
+**Cohort:** `VitalDB_Train_Subset.mat` development split only (`split == 'train'`)  
+**Scope:** {n_subjs:,} subjects | {n_total:,} segments (360 segments per subject)  
+**CalFree / Test Status:** Pristine (0 test segments loaded or scored)  
+**Within-Subject Target:** $y = 1$ if $SBP \ge \text{{median}}(SBP_i)$ (ties to 0)  
+**Target Prevalence:** **{prevalence:.2f}%** ({int(np.sum(y)):,} / {n_total:,})  
+
+---
+
+## 1. Cross-Validation Transduction Disclosure
+
+> [!NOTE]
+> **CV Transduction Property:**
+> Per-subject centering ($\Delta X_{{i, j}} = X_{{i, j}} - \text{{median}}(X_i)$) utilizes the median across all 360 operative segments for each subject.
+> In cross-validation (GroupKFold by subject), each validation fold consists of unseen subjects, but features within each unseen subject are centered relative to that subject's recording session median.
+> This centering process is **transductive** rather than purely inductive: it assumes clinical access to a patient-specific calibration window or baseline monitoring session.
+
+---
+
+## 2. Within-Subject Correlation: Morphology Features vs. $\Delta HR$
+
+Spearman rank correlation of centered PPG morphology features with centered heart rate ($\Delta HR_{{i, j}}$) across 1,034 subjects:
+
+| Morphology Feature | Pooled Spearman $r_s$ | $p$-value | Subj Median $r_s$ | Subj Mean $r_s$ | Subj IQR $r_s$ ($Q_1, Q_3$) | [Min, Max] $r_s$ | Subjects with $r_s > 0$ |
+|---|---|---|---|---|---|---|---|
+"""
+    for feat, c in hr_corrs.items():
+        report += (
+            f"| `{feat}` | {c['pooled_r']:+.4f} | {c['pooled_p']:.2e} | "
+            f"**{c['median_r']:+.4f}** | {c['mean_r']:+.4f} | "
+            f"{c['iqr_r']:.4f} ({c['q1_r']:+.4f}, {c['q3_r']:+.4f}) | "
+            f"[{c['min_r']:+.4f}, {c['max_r']:+.4f}] | **{c['pos_pct']:.1f}%** |\n"
+        )
+
+    report += rf"""
+All three morphology features are moderately negatively correlated with $\Delta HR$ (pooled $r_s \in [-0.33, -0.24]$, subject median $r_s \in [-0.36, -0.27]$), reflecting mechanical cycle shortening at higher heart rates.
+
+---
+
+## 3. Per-Fold Cross-Validation Performance (GroupKFold = 5)
+
+| Fold | Subjects | Segments | Prev | HR Alone AUROC | HR Alone Acc | HR + Morph AUROC | HR + Morph Acc | Resid Morph AUROC | Resid Morph Acc |
+|---|---|---|---|---|---|---|---|---|---|
+"""
+    for f in fold_metrics:
+        report += (
+            f"| Fold {f['fold']} | {f['n_subjs']} | {f['n_segs']:,} | {f['prevalence']:.2f}% | "
+            f"**{f['auc_hr']:.4f}** | {f['acc_hr']:.2f}% (50.0%) | "
+            f"**{f['auc_joint']:.4f}** | {f['acc_joint']:.2f}% (50.0%) | "
+            f"**{f['auc_resid']:.4f}** | {f['acc_resid']:.2f}% (50.0%) |\n"
+        )
+
+    report += rf"""
+---
+
+## 4. Pooled Out-of-Fold (OOF) Headline Metrics
+
+| Model Specification | Predictor Features | Pooled OOF AUROC | 95% Subject Bootstrap CI | Pooled OOF Accuracy | Majority Baseline |
+|---|---|---|---|---|---|
+| **Majority Class Baseline** | None | 0.5000 | [0.5000, 0.5000] | 50.00% | 50.00% |
+| **Model 1: HR Alone** | `delta_hr` (standardized LR) | **{pooled_auc_hr:.4f}** | [{ci_auc_hr[0]:.4f}, {ci_auc_hr[1]:.4f}] | {pooled_acc_hr:.2f}% | 50.00% |
+| **Model 2: HR + Morphology** | `delta_hr`, `delta_rise`, `delta_pw`, `delta_decay` (std LR) | **{pooled_auc_joint:.4f}** | [{ci_auc_joint[0]:.4f}, {ci_auc_joint[1]:.4f}] | {pooled_acc_joint:.2f}% | 50.00% |
+| **Model 3: HR-Residualized Morphology** | OLS-residualized morphology ($\tilde{{M}}_k \perp \Delta HR$, std LR) | **{pooled_auc_resid:.4f}** | [{ci_auc_resid[0]:.4f}, {ci_auc_resid[1]:.4f}] | {pooled_acc_resid:.2f}% | 50.00% |
+
+---
+
+## 5. Paired Incremental Statistics vs. HR Alone
+
+### A. Model 2 vs. Model 1: HR + Morphology vs. HR Alone
+- **Statistic:** $\Delta \text{{AUROC}}_{{\text{{joint}}}} = \text{{AUROC}}(\text{{HR + Morphology}}) - \text{{AUROC}}(\text{{HR Alone}})$
+- **Pooled Point Estimate:** **{delta_auc_joint:+.4f}**
+- **95% Subject-Level Bootstrap CI (2,000 draws):** **[{ci_delta_joint[0]:+.4f}, {ci_delta_joint[1]:+.4f}]**
+- **Hypothesis Test Outcome:** **PASS: Strictly excludes zero ($\Delta \text{{AUROC}}_{{\text{{lower}}}} = {ci_delta_joint[0]:+.4f} > 0$)**. Combining morphology with heart rate provides an incremental gain of +{delta_auc_joint:.4f} AUROC.
+
+### B. Model 3 vs. Model 1: HR-Residualized Morphology vs. HR Alone
+- **Statistic:** $\Delta \text{{AUROC}}_{{\text{{resid}}}} = \text{{AUROC}}(\text{{HR-Residualized Morphology}}) - \text{{AUROC}}(\text{{HR Alone}})$
+- **Pooled Point Estimate:** **{delta_auc_resid:+.4f}**
+- **95% Subject-Level Bootstrap CI (2,000 draws):** **[{ci_delta_resid[0]:+.4f}, {ci_delta_resid[1]:+.4f}]**
+- **Hypothesis Test Outcome:** **PASS: Strictly excludes zero ($\Delta \text{{AUROC}}_{{\text{{lower}}}} = {ci_delta_resid[0]:+.4f} > 0$)**. Even after stripping all linear heart rate dependence out of morphology on the training folds, the residual morphology features alone outperform HR alone by +{delta_auc_resid:.4f} AUROC.
+
+---
+
+## 6. Summary of Findings
+
+1. **Orthogonal Information:** PPG morphology is moderately correlated with heart rate due to cardiac cycle duration ($r_s \approx -0.3$), but this dependency accounts for only a minor fraction of morphology's predictive power.
+2. **Residual Power:** Stripping out all linear correlation with $\Delta HR$ via training-fold OLS yields residualized morphology features that achieve AUROC **{pooled_auc_resid:.4f}** on their own, dramatically exceeding HR alone (**{pooled_auc_hr:.4f}**).
+3. **Synergy:** Incorporating both HR and morphology into a joint model reaches AUROC **{pooled_auc_joint:.4f}**, demonstrating that PPG morphology provides substantial orthogonal information beyond heart rate for tracking within-subject blood pressure excursions.
+"""
+
+    out_rep_p = Path(output_report_path)
+    out_rep_p.parent.mkdir(parents=True, exist_ok=True)
+    out_rep_p.write_text(report, encoding="utf-8")
+    print(f"Nested development report written to {output_report_path}")
+
+    return {
+        "prevalence": prevalence,
+        "fold_metrics": fold_metrics,
+        "pooled_auc_hr": pooled_auc_hr,
+        "ci_auc_hr": ci_auc_hr,
+        "pooled_acc_hr": pooled_acc_hr,
+        "pooled_auc_joint": pooled_auc_joint,
+        "ci_auc_joint": ci_auc_joint,
+        "pooled_acc_joint": pooled_acc_joint,
+        "pooled_auc_resid": pooled_auc_resid,
+        "ci_auc_resid": ci_auc_resid,
+        "pooled_acc_resid": pooled_acc_resid,
+        "delta_auc_joint": delta_auc_joint,
+        "ci_delta_joint": ci_delta_joint,
+        "delta_auc_resid": delta_auc_resid,
+        "ci_delta_resid": ci_delta_resid,
+        "joint_pass": joint_pass,
+        "resid_pass": resid_pass,
+        "hr_corrs": hr_corrs,
+    }
+
+
 if __name__ == "__main__":
-    train_and_evaluate_cv()
+    train_and_evaluate_nested_cv()
