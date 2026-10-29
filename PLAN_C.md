@@ -158,3 +158,33 @@ Fixed settings across all comparisons; no hyperparameter tuning or search:
 
 4. **Change Freezing Protocol:**
    - No other feature definition or model architecture change is permitted prior to the development cross-validation run. Any subsequent modification requires another dated amendment committed to git before creating the `plan-c-locked` tag.
+
+
+### Amendment C3 (Pre-Registered Before Dev Results)
+**Date:** 2026-10-30  
+**Timing:** Committed before running development model training or generating development results.
+
+1. **Features Frozen & Dataset Checksums:**
+   - Feature definitions and tables are strictly frozen. No feature definition changes after this.
+   - Parquet feature table directory SHA-256 checksums (hash of 64 sorted `.parquet` part files / all directory files):
+     - `data/features_c/train_file.parquet`:
+       - Part files hash (64 parts): `1fdf00698c1e3b292d276bb012032db07add33cfd81f46bc299a84296298702b`
+       - All files hash (130 files): `2397ce9b6d945fa39951c15455bf248bbe9a0baced9e778b4b72b74fc9412cab`
+     - `data/features_c/calfree_test.parquet`:
+       - Part files hash (64 parts): `161786696e5ea3c06e5e4931c87019558391098ce9e7ead6332128a7e37be11e`
+       - All files hash (130 files): `f0dbd04f464be28b2030bdcacef697509adfea852fd5772f185d238dbd23f0e6`
+
+2. **Known Limitations (from `results/morphology_check_C.md` and Figure `results/morphology_check_C.png`):**
+   - In beats with long rise times, the argmin foot can sit at the start of a flat or bumpy diastolic run-off, so `systolic_rise_time` then includes part of the run-off.
+   - Rise time correlates with beat period.
+   - A small share of segments (about 0.1%, concentrated in a few subjects such as `p004089_1`) have `beat_count` and `hr_ibi` disagreeing by more than 19 bpm, likely due to double detection or irregular rhythm.
+   - The auxiliary fields `beat_count`, `ibi_sd`, `snr_ratio` carry no quality information in this cohort because upstream cleaning removed low-quality segments.
+   - `beat_count` equals `hr / 6`.
+
+3. **Primary Classifier & Primary Endpoint:**
+   - Primary classifier: `HistGradientBoostingClassifier(max_iter=100, max_depth=5, random_state=42)`.
+   - Secondary classifier: `LogisticRegression(C=100.0, regParam=0.01, penalty='l2')` with standardized inputs.
+   - Primary endpoint: Accuracy difference $C2 - C0$ for the primary classifier at a fixed decision threshold of $0.5$ ($P(\hat{y}=1) \ge 0.5$), with no recalibration.
+
+4. **Numbers Rule:**
+   - Every number in any results file is written by a script from computed values, never typed by hand.
