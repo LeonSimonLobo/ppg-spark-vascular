@@ -1,10 +1,11 @@
 """Cross-subject model training, 5-fold grouped CV, and validation pipeline (PLAN_C.md).
 
-Models:
+Models (Amendment C1 Ladder):
 - C0: Demographics baseline (age, sex, bmi)
 - C1: Demographics + Heart Rate from IBI (age, sex, bmi, hr_ibi)
-- C2: Demographics + Heart Rate + Morphology + Quality fields
-      (age, sex, bmi, hr_ibi, hr, ibi_sd, systolic_rise_time, pulse_width, decay_ratio, beat_count, is_clipped, snr_ratio)
+- C2m: C1 + morphology only (systolic_rise_time, pulse_width, decay_ratio)
+- C2: C1 + morphology + quality fields (systolic_rise_time, pulse_width, decay_ratio,
+      beat_count, is_clipped, snr_ratio, ibi_sd)
 
 Model Architectures (fixed settings, zero tuning):
 - Logistic Regression: regParam 0.01 (C = 100.0, l2 penalty), StandardScaler fit on train fold
@@ -33,10 +34,13 @@ from src.features_c import (
     get_feature_matrix,
     C0_COLS,
     C1_COLS,
+    C2m_COLS,
     C2_COLS,
     ALL_EXTRACTED_COLS,
 )
 from src.prospective_and_scale_w import fast_auc_with_ties
+
+LADDER_STEPS = ["C0", "C1", "C2m", "C2"]
 
 
 def compute_metrics(
@@ -90,9 +94,7 @@ def clustered_subject_bootstrap_metrics(
     unique_subjs, inv_idx = np.unique(subject_ids, return_inverse=True)
     n_subjs = len(unique_subjs)
 
-    # Pre-group segment indices by subject for fast vectorized gathering
     subj_indices = [np.where(inv_idx == s)[0] for s in range(n_subjs)]
-
     rng = np.random.default_rng(seed)
 
     model_names = list(prob_dict.keys())
@@ -102,7 +104,6 @@ def clustered_subject_bootstrap_metrics(
 
     for b in range(n_boot):
         sub_sample = rng.choice(n_subjs, size=n_subjs, replace=True)
-        # Concatenate indices of chosen subjects
         b_idx = np.concatenate([subj_indices[s] for s in sub_sample])
 
         b_y = y_true[b_idx]
@@ -134,25 +135,36 @@ def clustered_subject_bootstrap_metrics(
             "auroc": (float(np.percentile(boot_aurocs[m], 2.5)), float(np.percentile(boot_aurocs[m], 97.5))),
         }
 
-    # Paired differences within model class (C1 - C0, C2 - C1, C2 - C0)
+    # Stepwise paired differences (C1 - C0, C2m - C1, C2 - C2m, C2 - C0)
     paired_cis = {}
     for model_family in ["lr", "gbt"]:
         m0 = f"C0_{model_family}"
         m1 = f"C1_{model_family}"
+        m2m = f"C2m_{model_family}"
         m2 = f"C2_{model_family}"
 
+        # 1. Gain from Heart Rate (C1 - C0)
         if m0 in model_names and m1 in model_names:
             diff_acc_1_0 = boot_accs[m1] - boot_accs[m0]
             diff_auc_1_0 = boot_aurocs[m1] - boot_aurocs[m0]
             paired_cis[f"delta_acc_{m1}_minus_{m0}"] = (float(np.percentile(diff_acc_1_0, 2.5)), float(np.percentile(diff_acc_1_0, 97.5)))
             paired_cis[f"delta_auc_{m1}_minus_{m0}"] = (float(np.percentile(diff_auc_1_0, 2.5)), float(np.percentile(diff_auc_1_0, 97.5)))
 
-        if m1 in model_names and m2 in model_names:
-            diff_acc_2_1 = boot_accs[m2] - boot_accs[m1]
-            diff_auc_2_1 = boot_aurocs[m2] - boot_aurocs[m1]
-            paired_cis[f"delta_acc_{m2}_minus_{m1}"] = (float(np.percentile(diff_acc_2_1, 2.5)), float(np.percentile(diff_acc_2_1, 97.5)))
-            paired_cis[f"delta_auc_{m2}_minus_{m1}"] = (float(np.percentile(diff_auc_2_1, 2.5)), float(np.percentile(diff_auc_2_1, 97.5)))
+        # 2. Gain from Pulse Waveform Morphology Shape (C2m - C1)
+        if m1 in model_names and m2m in model_names:
+            diff_acc_2m_1 = boot_accs[m2m] - boot_accs[m1]
+            diff_auc_2m_1 = boot_aurocs[m2m] - boot_aurocs[m1]
+            paired_cis[f"delta_acc_{m2m}_minus_{m1}"] = (float(np.percentile(diff_acc_2m_1, 2.5)), float(np.percentile(diff_acc_2m_1, 97.5)))
+            paired_cis[f"delta_auc_{m2m}_minus_{m1}"] = (float(np.percentile(diff_auc_2m_1, 2.5)), float(np.percentile(diff_auc_2m_1, 97.5)))
 
+        # 3. Gain from Signal Quality Fields (C2 - C2m)
+        if m2m in model_names and m2 in model_names:
+            diff_acc_2_2m = boot_accs[m2] - boot_accs[m2m]
+            diff_auc_2_2m = boot_aurocs[m2] - boot_aurocs[m2m]
+            paired_cis[f"delta_acc_{m2}_minus_{m2m}"] = (float(np.percentile(diff_acc_2_2m, 2.5)), float(np.percentile(diff_acc_2_2m, 97.5)))
+            paired_cis[f"delta_auc_{m2}_minus_{m2m}"] = (float(np.percentile(diff_auc_2_2m, 2.5)), float(np.percentile(diff_auc_2_2m, 97.5)))
+
+        # 4. Total Pipeline Gain (C2 - C0)
         if m0 in model_names and m2 in model_names:
             diff_acc_2_0 = boot_accs[m2] - boot_accs[m0]
             diff_auc_2_0 = boot_aurocs[m2] - boot_aurocs[m0]
@@ -170,7 +182,7 @@ def train_and_eval_cv(
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, Dict[str, float]], List[Dict[str, Any]]]:
     """Execute 5-fold cross-validation with seeded permutation of subjects and disjoint assertion.
 
-    Fits C0, C1, C2 for Logistic Regression (C=100.0) and GBT.
+    Fits C0, C1, C2m, C2 for Logistic Regression (C=100.0) and GBT.
     Returns:
     - oof_probs: dict of {model_name: oof_prob_array}
     - pooled_metrics: dict of {model_name: metric_dict}
@@ -195,9 +207,11 @@ def train_and_eval_cv(
 
     fold_assignments = train_df["subject_id"].map(subj_to_fold).to_numpy()
 
-    model_keys = ["C0_lr", "C1_lr", "C2_lr", "C0_gbt", "C1_gbt", "C2_gbt"]
-    oof_probs = {k: np.zeros(n_rows, dtype=np.float32) for k in model_keys}
+    model_keys = []
+    for step in LADDER_STEPS:
+        model_keys.extend([f"{step}_lr", f"{step}_gbt"])
 
+    oof_probs = {k: np.zeros(n_rows, dtype=np.float32) for k in model_keys}
     fold_metrics = []
     y_all = train_df[target_col].to_numpy(dtype=int)
 
@@ -235,7 +249,7 @@ def train_and_eval_cv(
             "n_val": len(y_val),
         }
 
-        for step in ["C0", "C1", "C2"]:
+        for step in LADDER_STEPS:
             X_tr, feat_names = get_feature_matrix(df_tr_imp, step)
             X_val, _ = get_feature_matrix(df_val_imp, step)
 
@@ -288,7 +302,7 @@ def fit_and_freeze_full_models(
     models_dir: str = "models",
     seed: int = 42,
 ) -> Dict[str, Tuple[str, str]]:
-    """Fit final C0, C1, C2 models on entire development set and freeze to disk.
+    """Fit final C0, C1, C2m, C2 models on entire development set and freeze to disk.
 
     Returns:
     - dict of {model_key: (file_path, sha256_hash)}
@@ -309,7 +323,7 @@ def fit_and_freeze_full_models(
 
     frozen_dict = {}
 
-    for step in ["C0", "C1", "C2"]:
+    for step in LADDER_STEPS:
         X_full, feat_names = get_feature_matrix(df_imp, step)
 
         # 1. Logistic Regression
@@ -386,7 +400,7 @@ def evaluate_on_calfree(
     y_cf = calfree_df[target_col].to_numpy(dtype=int)
     probs = {}
 
-    for step in ["C0", "C1", "C2"]:
+    for step in LADDER_STEPS:
         # Evaluate LR
         lr_path = frozen_models_dict[f"{step}_lr"][0]
         with open(lr_path, "rb") as f:
