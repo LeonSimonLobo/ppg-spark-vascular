@@ -4,31 +4,41 @@ from pathlib import Path
 import pytest
 import numpy as np
 from src.test_w import (
-    verify_frozen_model_hash,
-    verify_test_lock,
+    verify_frozen_model_hashes,
+    check_and_acquire_lock_pre_scoring,
     bootstrap_subject_paired,
-    EXPECTED_FROZEN_MODEL_HASH,
-    FROZEN_MODEL_PATH,
+    EXPECTED_W_HASH,
+    FROZEN_W_PATH,
 )
 
 
-def test_verify_frozen_model_hash():
-    """Verify that models/w_frozen.pkl matches the pre-registered SHA-256."""
-    actual_hash = verify_frozen_model_hash(FROZEN_MODEL_PATH)
-    assert actual_hash == EXPECTED_FROZEN_MODEL_HASH
+def test_verify_frozen_model_hashes():
+    """Verify that frozen models match pre-registered SHA-256 digests."""
+    hashes = verify_frozen_model_hashes()
+    assert hashes["Primary Morphology (W)"] == EXPECTED_W_HASH
 
 
-def test_verify_test_lock(tmp_path, monkeypatch):
-    """Verify lock guard prevents re-execution."""
-    # When lock file does not exist: passes
+def test_frozen_model_hash_mismatch_raises(monkeypatch):
+    """Verify that hash mismatch raises ValueError."""
+    monkeypatch.setattr("src.test_w.EXPECTED_W_HASH", "wrong_hash_123456789")
+    with pytest.raises(ValueError, match="Frozen model hash mismatch"):
+        verify_frozen_model_hashes()
+
+
+def test_check_and_acquire_lock_pre_scoring(tmp_path, monkeypatch):
+    """Verify pre-scoring lock creation and re-execution blocking."""
     fake_lock = tmp_path / ".test_locked_W"
     monkeypatch.setattr("src.test_w.LOCK_FILE_PATH", str(fake_lock))
-    verify_test_lock()
 
-    # When lock file exists: raises RuntimeError
-    fake_lock.write_text("LOCKED")
-    with pytest.raises(RuntimeError, match="Test execution is locked"):
-        verify_test_lock()
+    # Initial acquisition succeeds and writes file
+    assert not fake_lock.exists()
+    check_and_acquire_lock_pre_scoring()
+    assert fake_lock.exists()
+    assert "STATUS: LOCKED_PRE_SCORING" in fake_lock.read_text()
+
+    # Second acquisition raises RuntimeError
+    with pytest.raises(RuntimeError, match="Test execution is LOCKED"):
+        check_and_acquire_lock_pre_scoring()
 
 
 def test_bootstrap_subject_paired_synthetic():

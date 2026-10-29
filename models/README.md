@@ -13,12 +13,14 @@ This directory holds trained model artifacts.
 
 | Model File | Target Task | Training Cohort | Architecture | SHA-256 Checksum |
 |---|---|---|---|---|
-| **`w_frozen.pkl`** | Within-subject $SBP \ge \text{median}(SBP_i)$ | `VitalDB_Train_Subset.mat` training split (372,240 segments across 1,034 subjects) | `StandardScaler` + `LogisticRegression(solver='lbfgs', random_state=42)` | `92c9176b456e00630c45071afcdb1f5e0423d393ca2f6ad2ecf9357f5e640fdc` |
+| **`w_frozen.pkl`** | Primary Morphology | `VitalDB_Train_Subset.mat` training split (372,240 segments across 1,034 subjects) | `StandardScaler` + `LogisticRegression(solver='lbfgs', random_state=42)` on 3 centered morphology timing features | `92c9176b456e00630c45071afcdb1f5e0423d393ca2f6ad2ecf9357f5e640fdc` |
+| **`hr_frozen.pkl`** | Non-Morphology HR Comparator | `VitalDB_Train_Subset.mat` training split (372,240 segments across 1,034 subjects) | `StandardScaler` + `LogisticRegression(solver='lbfgs', random_state=42)` on `delta_hr` | `b1f8a705bc9292a936476857b9eebc4c0d18ae5a1d59c0445bc84dcfe8a6eaf5` |
+| **`joint_frozen.pkl`** | Joint Model (Sensitivity) | `VitalDB_Train_Subset.mat` training split (372,240 segments across 1,034 subjects) | `StandardScaler` + `LogisticRegression(solver='lbfgs', random_state=42)` on `delta_hr` + 3 morphology features | `080296d8e309de97ed4eb5c65c1c69405cbecdfc19a7b7a452d92872530b5982` |
 
 ---
 
 ## Re-generation
-The frozen model is deterministically produced by running:
+The frozen models are deterministically produced by running:
 ```bash
 python -m src.train_w
 ```
