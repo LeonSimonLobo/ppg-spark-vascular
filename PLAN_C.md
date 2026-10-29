@@ -125,3 +125,36 @@ Fixed settings across all comparisons; no hyperparameter tuning or search:
      $$\Delta \text{Gain}(\text{Morphology Shape}) = C2m - C1$$
      $$\Delta \text{Gain}(\text{Signal Quality}) = C2 - C2m$$
      $$\Delta \text{Gain}(\text{Total Pipeline}) = C2 - C0$$
+
+
+### Amendment C2 (Pre-Registered Before Development Model Training & Results)
+**Date:** 2026-10-29  
+**Timing:** Decided and committed before any model training, validation scoring, or development results were generated. Decided strictly on the basis of the label-free feature distribution sanity audit (`results/superseded/features_C_sanity_v1.md`); no Study C label analysis (`sbp`, `dbp`) or model result existed when this was decided.
+
+1. **Inter-Peak Foot Definition & Physiological Morphology Extraction (`src/features_c.py` ONLY):**
+   - *Rationale:* The previous fixed 300 ms foot search window preceding a systolic peak caused an artificial search-window ceiling at $0.304\text{ s}$ ($38\text{ samples}$ at $125\text{ Hz}$), truncating $18.7\%$ of Train and $19.4\%$ of CalFree segments, which also contaminated `pulse_width` and `decay_ratio`.
+   - *Scope:* Changed strictly in `src/features_c.py` only (do not modify `src/fiducials.py` or any Study W code).
+   - *Foot Definition:* Replace the 300 ms window by:
+     $$\text{foot}_k = \operatorname{argmin}_{t \in [p_{k-1}, p_k]} \text{PPG}(t)$$
+     where $p_k$ is the sample index of systolic peak $k$.
+   - *Beat Qualification Criterion:* Beat $k$ is used for morphology extraction if and only if it has both an immediately preceding peak $p_{k-1}$ and a following peak $p_{k+1}$, and both adjacent inter-peak intervals satisfy physiological bounds:
+     $$0.4\text{ s} \le \frac{p_k - p_{k-1}}{f_s} \le 1.5\text{ s} \quad \text{and} \quad 0.4\text{ s} \le \frac{p_{k+1} - p_k}{f_s} \le 1.5\text{ s}$$
+     (corresponding to physiological heart rates of 40–150 bpm; no free parameter was tuned).
+   - *Per-Beat Metrics:*
+     - $\text{systolic\_rise\_time}_k = \frac{p_k - \text{foot}_k}{f_s}$
+     - $\text{pulse\_width}_k = \text{FWHM at the 50% amplitude level between } y(\text{foot}_k) \text{ and } y(p_k)$
+     - $\text{decay\_ratio}_k = \frac{(\text{foot}_{k+1} - p_k) / f_s}{\text{systolic\_rise\_time}_k}$, where $\text{foot}_{k+1} = \operatorname{argmin}_{t \in [p_k, p_{k+1}]} \text{PPG}(t)$
+   - *Segment Aggregation:* Segment-level value is the median over all qualified beats in the segment. If no beat qualifies, the segment value is set to $\text{NaN}$ (handled downstream via training-median imputation plus a binary missing-indicator column as pre-registered in the plan).
+   - `hr_ibi`, `ibi_sd`, `beat_count` and the Elgendi peak detector remain completely unchanged.
+
+2. **Exclusion of Degenerate Feature (`is_clipped`):**
+   - The label-free audit demonstrated that `is_clipped` is identically $0.0$ across all 523,080 segments in both Train and CalFree (zero rail saturation).
+   - `is_clipped` is excluded from all model input feature ladders (C2) and reported as degenerate with zero variance.
+
+3. **Wording Refinement & Cohort Quality Limitation:**
+   - The descriptor "quality-aware" is formally removed from the claim.
+   - The feature group $\{\text{beat\_count}, \text{ibi\_sd}, \text{snr\_ratio}\}$ is designated as "auxiliary segment fields".
+   - *Documented Limitation:* VitalDB/PulseDB pre-filtering leaves no low-quality segments in the dataset ($\text{snr\_ratio} \ge 0.945$, zero clipping, $\ge 7\text{ beats}$ everywhere). Consequently, the signal quality filtering capability of the pipeline cannot be empirically evaluated on this cohort; additionally, $\text{beat\_count}$ identically equals $\text{hr} / 6$.
+
+4. **Change Freezing Protocol:**
+   - No other feature definition or model architecture change is permitted prior to the development cross-validation run. Any subsequent modification requires another dated amendment committed to git before creating the `plan-c-locked` tag.
