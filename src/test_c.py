@@ -212,29 +212,38 @@ def verify_frozen_model_hashes(expected_hashes: Dict[str, str]) -> Dict[str, Any
 
 def load_aami_cal_metadata(mat_path: str = MAT_PATH) -> pd.DataFrame:
     """Read demographics, SBP, subject IDs from AAMI_Cal MAT file."""
+    print(f"Reading AAMI_Cal metadata from {mat_path}...")
     with h5py.File(mat_path, "r") as f:
         subset = f["Subset"]
         n_segs = subset["Signals"].shape[2]
         print(f"Reading AAMI_Cal metadata for {n_segs:,} segments...")
 
-        # Subject strings
-        subj_refs = subset["Subject"][0, :]
-        subjs = []
-        for r in subj_refs:
-            chars = np.asarray(f[r]).ravel()
-            subjs.append("".join(chr(int(c)) for c in chars))
+        subj_refs = subset["Subject"][0, :n_segs]
+        gen_refs = subset["Gender"][0, :n_segs]
 
-        # Demographics
-        age_arr = np.asarray(subset["Age"]).ravel().astype(np.float32)
-        sex_arr = np.asarray(subset["Sex"]).ravel().astype(np.float32)
-        bmi_arr = np.asarray(subset["BMI"]).ravel().astype(np.float32)
+        subjs = []
+        sex_arr = np.full(n_segs, np.nan, dtype=np.float32)
+        prev_sub, prev_sex = None, np.nan
+        for i in range(n_segs):
+            s = "".join(chr(int(c)) for c in np.asarray(f[subj_refs[i]]).ravel())
+            if s != prev_sub:
+                c = "".join(chr(int(x)) for x in np.asarray(f[gen_refs[i]]).ravel()).strip().upper()
+                prev_sex = 1.0 if c == "M" else (0.0 if c == "F" else np.nan)
+                prev_sub = s
+            subjs.append(s)
+            sex_arr[i] = prev_sex
+
+        age_arr = np.asarray(subset["Age"][0, :n_segs], dtype=np.float32)
+        bmi_arr = np.asarray(subset["BMI"][0, :n_segs], dtype=np.float32)
 
         # SBP from Invasive Arterial Line
         if "SBP" in subset:
-            sbp_arr = np.asarray(subset["SBP"]).ravel().astype(np.float32)
+            sbp_arr = np.asarray(subset["SBP"][0, :n_segs], dtype=np.float32)
         else:
             abp_block = subset["Signals"][:, 0, :]
             sbp_arr = np.max(abp_block, axis=0).astype(np.float32)
+
+        dbp_arr = np.asarray(subset["DBP"][0, :n_segs], dtype=np.float32) if "DBP" in subset else np.full(n_segs, np.nan, dtype=np.float32)
 
     df = pd.DataFrame({
         "subject_id": subjs,
@@ -243,6 +252,7 @@ def load_aami_cal_metadata(mat_path: str = MAT_PATH) -> pd.DataFrame:
         "sex": sex_arr,
         "bmi": bmi_arr,
         "sbp": sbp_arr,
+        "dbp": dbp_arr,
     })
     return df
 
