@@ -106,8 +106,8 @@ def write_aami_cal_report(
         "",
         "### Paired Hypothesis Testing & Stepwise Gain Decomposition",
         "",
-        "| Comparison | Model Family | Paired $\\Delta\\text{Accuracy}$ [95% CI] | Paired $\\Delta\\text{AUROC}$ [95% CI] | Goal Target (+4-5%) |",
-        "|---|---|---|---|---|",
+        "| Comparison | Model Family | Paired $\\Delta\\text{Accuracy}$ [95% CI] | Paired $\\Delta\\text{AUROC}$ [95% CI] |",
+        "|---|---|---|---|",
     ])
 
     for fam, fname in [("lr", "Logistic Regression"), ("gbt", "GBT")]:
@@ -118,7 +118,7 @@ def write_aami_cal_report(
         lines.append(
             f"| **C1 vs C0 (Gain from Heart Rate)** | {fname} | "
             f"**{(m1['accuracy'] - m0['accuracy']) * 100.0:+.2f}%** [{d_acc_10[0] * 100.0:+.2f}%, {d_acc_10[1] * 100.0:+.2f}%] | "
-            f"**{(m1['auroc'] - m0['auroc']):+.4f}** [{d_auc_10[0]:+.4f}, {d_auc_10[1]:+.4f}] | N/A |"
+            f"**{(m1['auroc'] - m0['auroc']):+.4f}** [{d_auc_10[0]:+.4f}, {d_auc_10[1]:+.4f}] |"
         )
 
         d_acc_2m1 = paired_cis[f"delta_acc_C2m_{fam}_minus_C1_{fam}"]
@@ -127,7 +127,7 @@ def write_aami_cal_report(
         lines.append(
             f"| **C2m vs C1 (Gain from Pulse Morphology)** | {fname} | "
             f"**{(m2m['accuracy'] - m1['accuracy']) * 100.0:+.2f}%** [{d_acc_2m1[0] * 100.0:+.2f}%, {d_acc_2m1[1] * 100.0:+.2f}%] | "
-            f"**{(m2m['auroc'] - m1['auroc']):+.4f}** [{d_auc_2m1[0]:+.4f}, {d_auc_2m1[1]:+.4f}] | N/A |"
+            f"**{(m2m['auroc'] - m1['auroc']):+.4f}** [{d_auc_2m1[0]:+.4f}, {d_auc_2m1[1]:+.4f}] |"
         )
 
         d_acc_22m = paired_cis[f"delta_acc_C2_{fam}_minus_C2m_{fam}"]
@@ -136,7 +136,7 @@ def write_aami_cal_report(
         lines.append(
             f"| **C2 vs C2m (Gain from Signal Quality Fields)** | {fname} | "
             f"**{(m2['accuracy'] - m2m['accuracy']) * 100.0:+.2f}%** [{d_acc_22m[0] * 100.0:+.2f}%, {d_acc_22m[1] * 100.0:+.2f}%] | "
-            f"**{(m2['auroc'] - m2m['auroc']):+.4f}** [{d_auc_22m[0]:+.4f}, {d_auc_22m[1]:+.4f}] | N/A |"
+            f"**{(m2['auroc'] - m2m['auroc']):+.4f}** [{d_auc_22m[0]:+.4f}, {d_auc_22m[1]:+.4f}] |"
         )
 
         d_acc_20 = paired_cis[f"delta_acc_C2_{fam}_minus_C0_{fam}"]
@@ -145,9 +145,14 @@ def write_aami_cal_report(
         lines.append(
             f"| **C2 vs C0 (Primary Endpoint: Total Pipeline Gain)** | {fname} | "
             f"**{diff_acc_val:+.2f}%** [{d_acc_20[0] * 100.0:+.2f}%, {d_acc_20[1] * 100.0:+.2f}%] | "
-            f"**{(m2['auroc'] - m0['auroc']):+.4f}** [{d_auc_20[0]:+.4f}, {d_auc_20[1]:+.4f}] | "
-            f"{'MET' if diff_acc_val >= 4.0 else 'BELOW'} |"
+            f"**{(m2['auroc'] - m0['auroc']):+.4f}** [{d_auc_20[0]:+.4f}, {d_auc_20[1]:+.4f}] |"
         )
+
+    lines.extend([
+        "",
+        "> [!NOTE]",
+        "> The exploratory benchmark goal of +4–5 percentage points accuracy gain is an aspiration, not a pass/fail criterion.",
+    ])
 
     if expected_hashes:
         lines.extend([

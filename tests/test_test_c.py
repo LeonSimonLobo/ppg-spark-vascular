@@ -317,3 +317,55 @@ def test_save_per_segment_predictions_output(tmp_path):
     assert len(read_df) == 5
     assert list(read_df.columns) == list(pred_df.columns)
 
+
+def test_stage2_report_generation_neutral_wording(tmp_path):
+    """Test Stage 2 report generation with neutral wording (no MET/NOT MET)."""
+    import numpy as np
+    import pandas as pd
+    from src.report_test_c import generate_test_report
+    from src.train_c import LADDER_STEPS
+
+    # Create synthetic predictions parquet
+    n = 10
+    cols = ["subject_id", "segment_idx", "sbp", "y_120", "y_130"]
+    data = {
+        "subject_id": [f"p{i % 3}" for i in range(n)],
+        "segment_idx": np.arange(n, dtype=np.int32),
+        "sbp": np.linspace(100, 150, n).astype(np.float32),
+        "y_120": (np.linspace(100, 150, n) >= 120.0).astype(int),
+        "y_130": (np.linspace(100, 150, n) >= 130.0).astype(int),
+    }
+    for step in LADDER_STEPS:
+        for fam in ["lr", "gbt"]:
+            data[f"prob_{step}_{fam}"] = np.linspace(0.1, 0.9, n)
+
+    pred_pq = tmp_path / "test_C_predictions.parquet"
+    pd.DataFrame(data).to_parquet(str(pred_pq), index=False)
+
+    out_md = tmp_path / "test_C.md"
+    diff_csv = tmp_path / "test_C_diffs.csv"
+
+    generate_test_report(
+        predictions_path=str(pred_pq),
+        output_report=str(out_md),
+        diffs_csv_path=str(diff_csv),
+        n_boot=20, # small bootstrap for test
+        seed=42,
+        cohort_name="Synthetic_Cohort",
+    )
+
+    assert out_md.exists()
+    assert diff_csv.exists()
+
+    md_text = out_md.read_text(encoding="utf-8")
+    assert "MET" not in md_text
+    assert "BELOW" not in md_text
+    assert "aspiration, not a pass/fail criterion" in md_text
+    assert "Synthetic_Cohort" in md_text
+
+    diff_df = pd.read_csv(str(diff_csv))
+    assert len(diff_df) == 8
+    expected_comps = {"C1_minus_C0", "C2m_minus_C1", "C2_minus_C2m", "C2_minus_C0"}
+    assert set(diff_df["comparison"]) == expected_comps
+
+
