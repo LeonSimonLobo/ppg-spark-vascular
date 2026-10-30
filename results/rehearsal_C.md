@@ -1,0 +1,85 @@
+# Study C Held-Out Test Pipeline Rehearsal Report (`results/rehearsal_C.md`)
+
+**Date:** 2026-10-30  
+**Scope:** Full end-to-end rehearsal executed inside an isolated scratch clone (`../ppg_scratch`).  
+**Target MAT:** `VitalDB_CalFree_Test_Subset.mat` (57,600 segments across 144 subjects; **zero AAMI data opened**).  
+**Pre-Flight Security Gates:** All 6 security gates enforced without bypass or patching.  
+
+---
+
+## 1. Rehearsal Timings & Performance
+
+| Stage | Operation | Duration | Throughput / Details |
+|---|---|---|---|
+| **Pre-Flight Gates & Lock** | Git tag, plan hash, model hash checks & lock acquisition | ~0.5s | All 6 gates passed |
+| **Metadata Loading** | `load_aami_cal_metadata` on 57,600 segments | ~1.5s | Dereferenced Subject & Gender |
+| **In-Process Feature Extraction** | `extract_aami_cal_features` (4 chunks of 15k) | **37.0s** | **1,554.7 seg/s** |
+| **Imputation & Scoring** | 8 models (C0, C1, C2m, C2 x LR, GBT) & predictions parquet save | ~3.5s | Saved 57,600 rows x 13 columns |
+| **Stage 2 (Report Generation)** | 2,000 clustered subject bootstrap resamples & markdown/diffs write | ~62.1s | 8 paired comparisons |
+| **Total End-to-End Pipeline** | Full single-pass run (`score_aami_cal_test`) | **104.64s** | Completed & permanently locked |
+| **Standalone Stage 2 Rebuild** | Rebuilding report strictly from predictions parquet (`report_test_c.py`) | **72.22s** | Zero .mat access / zero rescoring |
+
+---
+
+## 2. Verification of Rehearsal Checks
+
+### Check 1: Artifacts & Lock Sentinel Creation
+- `results/.test_locked_C`: **CREATED** (`Status: COMPLETED_AND_PERMANENTLY_LOCKED`, recorded git commit & plan hash).
+- `results/test_C_predictions.parquet`: **CREATED** (57,600 rows, 13 columns: `subject_id`, `segment_idx`, `sbp`, `y_120`, `y_130`, and all 8 model probability columns).
+- `results/test_C.md`: **CREATED** (Complete test report with cohort stats, model metrics table, and paired diffs).
+- `results/test_C_diffs.csv`: **CREATED** (8 paired comparison rows matching development diffs format).
+
+### Check 2: Model Scoring Parity against Development (`results/dev_C_metrics.csv`)
+
+| Model | Classifier | Metric | dev_C_metrics.csv | Rehearsal Value | Absolute Diff | Status (Tol 1e-4) |
+|---|---|---|---|---|---|---|
+| **C0** | LR | `accuracy` | 0.6230 | 0.6230 | 0.00e+00 | **PASS** |
+| **C0** | LR | `balanced_accuracy` | 0.5000 | 0.5000 | 0.00e+00 | **PASS** |
+| **C0** | LR | `auroc` | 0.5514 | 0.5514 | 0.00e+00 | **PASS** |
+| **C0** | GBT | `accuracy` | 0.6076 | 0.6076 | 0.00e+00 | **PASS** |
+| **C0** | GBT | `balanced_accuracy` | 0.5018 | 0.5018 | 0.00e+00 | **PASS** |
+| **C0** | GBT | `auroc` | 0.5224 | 0.5224 | 0.00e+00 | **PASS** |
+| **C1** | LR | `accuracy` | 0.6230 | 0.6230 | 0.00e+00 | **PASS** |
+| **C1** | LR | `balanced_accuracy` | 0.5000 | 0.5000 | 0.00e+00 | **PASS** |
+| **C1** | LR | `auroc` | 0.5390 | 0.5390 | 0.00e+00 | **PASS** |
+| **C1** | GBT | `accuracy` | 0.5980 | 0.5980 | 0.00e+00 | **PASS** |
+| **C1** | GBT | `balanced_accuracy` | 0.4935 | 0.4935 | 0.00e+00 | **PASS** |
+| **C1** | GBT | `auroc` | 0.5211 | 0.5211 | 0.00e+00 | **PASS** |
+| **C2m** | LR | `accuracy` | 0.6281 | 0.6281 | 0.00e+00 | **PASS** |
+| **C2m** | LR | `balanced_accuracy` | 0.5501 | 0.5501 | 0.00e+00 | **PASS** |
+| **C2m** | LR | `auroc` | 0.6192 | 0.6192 | 1.11e-16 | **PASS** |
+| **C2m** | GBT | `accuracy` | 0.6487 | 0.6487 | 0.00e+00 | **PASS** |
+| **C2m** | GBT | `balanced_accuracy` | 0.5932 | 0.5932 | 0.00e+00 | **PASS** |
+| **C2m** | GBT | `auroc` | 0.6659 | 0.6659 | 0.00e+00 | **PASS** |
+| **C2** | LR | `accuracy` | 0.6280 | 0.6280 | 0.00e+00 | **PASS** |
+| **C2** | LR | `balanced_accuracy` | 0.5510 | 0.5510 | 0.00e+00 | **PASS** |
+| **C2** | LR | `auroc` | 0.6199 | 0.6199 | 1.67e-08 | **PASS** |
+| **C2** | GBT | `accuracy` | 0.6511 | 0.6511 | 0.00e+00 | **PASS** |
+| **C2** | GBT | `balanced_accuracy` | 0.5952 | 0.5952 | 0.00e+00 | **PASS** |
+| **C2** | GBT | `auroc` | 0.6643 | 0.6643 | 1.28e-09 | **PASS** |
+
+### Check 3: Neutral Benchmark Wording Verified
+- Terms `MET`, `NOT MET`, `PASS`, or `FAIL` are **strictly absent** from the report's paired hypothesis testing table.
+- Primary endpoint output: `| **C2 vs C0 (Primary Endpoint: Total Pipeline Gain)** | GBT | **+4.34%** [+0.35%, +8.63%] | **+0.1419** [+0.0864, +0.2005] |`
+- Neutral explanatory note confirmed: *"> [!NOTE]\n> The exploratory benchmark goal of +4–5 percentage points accuracy gain is an aspiration, not a pass/fail criterion."*
+
+### Check 4: Security Gate Enforcement on Repeated Execution
+- A second attempt to run `score_aami_cal_test()` in the clone was **immediately refused** by Gate 5:
+  ```text
+  RuntimeError: PRE-FLIGHT GATE 5 FAILED: Test report results/test_C.md already exists! Repeated evaluations on held-out test data are strictly prohibited.
+  ```
+- Zero test data was re-opened, confirming irreversible single-execution enforcement.
+
+### Check 5: Stage 2 Standalone Rebuild After Report Deletion
+- Deleting `results/test_C.md` and invoking `python src/report_test_c.py` regenerated the complete markdown report in **72.22s** from `results/test_C_predictions.parquet` without touching `.mat` or triggering pre-flight lock checks.
+
+---
+
+## 3. Real Repository State Verification
+
+- Scratch clone directory `../ppg_scratch` was completely removed.
+- In the primary repository:
+  - `results/.test_locked_C` exists: **False**
+  - `results/test_C.md` exists: **False**
+  - All 9 model hashes match `results/dev_C.md` bit-for-bit.
+  - Git working tree is clean.
