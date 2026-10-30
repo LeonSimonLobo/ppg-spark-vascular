@@ -42,6 +42,7 @@ REPORT_PATH = "results/test_C.md"
 DEV_REPORT_PATH = "results/dev_C.md"
 PLAN_FILE_PATH = "PLAN_C.md"
 MAT_PATH = "data/raw/VitalDB_AAMI_Cal_Subset.mat"
+PREDICTIONS_PATH = "results/test_C_predictions.parquet"
 
 
 def verify_preflight_gates(
@@ -246,12 +247,116 @@ def load_aami_cal_metadata(mat_path: str = MAT_PATH) -> pd.DataFrame:
     return df
 
 
+def extract_aami_cal_features(
+    mat_path: str = MAT_PATH,
+    meta_df: Optional[pd.DataFrame] = None,
+    chunk_size: int = 15000,
+    fs: int = 125,
+) -> pd.DataFrame:
+    """Extract PPG Channel 1 features in chunks from MAT file."""
+    if meta_df is None:
+        meta_df = load_aami_cal_metadata(mat_path=mat_path)
+    n_segs = len(meta_df)
+
+    print(f"\nExtracting PPG Channel 1 features from {mat_path}...")
+    hr_ibi_arr = np.full(n_segs, np.nan, dtype=np.float32)
+    hr_arr = np.full(n_segs, np.nan, dtype=np.float32)
+    ibi_sd_arr = np.full(n_segs, np.nan, dtype=np.float32)
+    rise_arr = np.full(n_segs, np.nan, dtype=np.float32)
+    pw_arr = np.full(n_segs, np.nan, dtype=np.float32)
+    dec_arr = np.full(n_segs, np.nan, dtype=np.float32)
+    beat_arr = np.zeros(n_segs, dtype=np.float32)
+    clipped_arr = np.zeros(n_segs, dtype=np.float32)
+    snr_arr = np.zeros(n_segs, dtype=np.float32)
+
+    t0 = time.time()
+    with h5py.File(mat_path, "r") as f:
+        sig_ds = f["Subset"]["Signals"]
+        for c_start in range(0, n_segs, chunk_size):
+            c_end = min(n_segs, c_start + chunk_size)
+            ppg_block = sig_ds[:, 1, c_start:c_end]
+
+            block_res = extract_features_block(ppg_block, fs=fs)
+            hr_ibi_arr[c_start:c_end] = block_res["hr_ibi"]
+            hr_arr[c_start:c_end] = block_res["hr"]
+            ibi_sd_arr[c_start:c_end] = block_res["ibi_sd"]
+            rise_arr[c_start:c_end] = block_res["systolic_rise_time"]
+            pw_arr[c_start:c_end] = block_res["pulse_width"]
+            dec_arr[c_start:c_end] = block_res["decay_ratio"]
+            beat_arr[c_start:c_end] = block_res["beat_count"]
+            clipped_arr[c_start:c_end] = block_res["is_clipped"]
+            snr_arr[c_start:c_end] = block_res["snr_ratio"]
+
+    elapsed_feat = time.time() - t0
+    print(f"Feature extraction complete in {elapsed_feat:.1f}s ({n_segs / elapsed_feat:.1f} seg/s).")
+
+    feat_df = meta_df.copy()
+    feat_df["hr_ibi"] = hr_ibi_arr
+    feat_df["hr"] = hr_arr
+    feat_df["ibi_sd"] = ibi_sd_arr
+    feat_df["systolic_rise_time"] = rise_arr
+    feat_df["pulse_width"] = pw_arr
+    feat_df["decay_ratio"] = dec_arr
+    feat_df["beat_count"] = beat_arr
+    feat_df["is_clipped"] = clipped_arr
+    feat_df["snr_ratio"] = snr_arr
+    return feat_df
+
+
+def impute_aami_cal_features(
+    feat_df: pd.DataFrame,
+    imputer_medians: Dict[str, float],
+) -> pd.DataFrame:
+    """Apply frozen PlanCImputer medians to feature DataFrame."""
+    imputer = PlanCImputer()
+    imputer.medians_ = imputer_medians
+    return imputer.transform(feat_df)
+
+
+def score_aami_cal_models(
+    df_imp: pd.DataFrame,
+    artifacts: Dict[str, Any],
+) -> Tuple[Dict[str, np.ndarray], pd.DataFrame]:
+    """Score imputed DataFrame with frozen models and construct predictions table."""
+    print("\nScoring with frozen models...")
+    probs = {}
+    for step in LADDER_STEPS:
+        # Check both lower and original casing in artifacts
+        art_lr = artifacts.get(f"{step.lower()}_lr") or artifacts.get(f"{step}_lr")
+        X_lr, _ = get_feature_matrix(df_imp, step)
+        X_lr_s = art_lr["scaler"].transform(X_lr)
+        prob_lr = art_lr["model"].predict_proba(X_lr_s)[:, 1]
+        probs[f"{step}_lr"] = prob_lr
+
+        art_gbt = artifacts.get(f"{step.lower()}_gbt") or artifacts.get(f"{step}_gbt")
+        X_gbt, _ = get_feature_matrix(df_imp, step)
+        prob_gbt = art_gbt["model"].predict_proba(X_gbt)[:, 1]
+        probs[f"{step}_gbt"] = prob_gbt
+
+    y_120_vals = df_imp["y_120"].values if "y_120" in df_imp else (df_imp["sbp"] >= 120.0).astype(int).values
+    y_130_vals = df_imp["y_130"].values if "y_130" in df_imp else (df_imp["sbp"] >= 130.0).astype(int).values
+    pred_df = pd.DataFrame({
+        "subject_id": df_imp["subject_id"].values,
+        "segment_idx": df_imp["segment_idx"].values,
+        "sbp": df_imp["sbp"].values,
+        "y_120": y_120_vals,
+        "y_130": y_130_vals,
+    })
+    for step in LADDER_STEPS:
+        for fam in ["lr", "gbt"]:
+            k = f"{step}_{fam}"
+            pred_df[f"prob_{k}"] = probs[k]
+
+    return probs, pred_df
+
+
 def score_aami_cal_test(
     mat_path: str = MAT_PATH,
     output_report: str = REPORT_PATH,
     dev_report_path: str = DEV_REPORT_PATH,
     plan_path: str = PLAN_FILE_PATH,
     lock_path: str = LOCK_FILE_PATH,
+    predictions_path: str = PREDICTIONS_PATH,
     n_boot: int = 2000,
     seed: int = 42,
     git_commit: str = "HEAD",
@@ -294,77 +399,24 @@ def score_aami_cal_test(
         print(f"AAMI_Cal SBP >= 130 prevalence: {prev_130 * 100.0:.2f}%")
 
         # 5. Extract PPG Features in Chunks
-        print(f"\nExtracting PPG Channel 1 features from {mat_path}...")
-        hr_ibi_arr = np.full(n_segs, np.nan, dtype=np.float32)
-        hr_arr = np.full(n_segs, np.nan, dtype=np.float32)
-        ibi_sd_arr = np.full(n_segs, np.nan, dtype=np.float32)
-        rise_arr = np.full(n_segs, np.nan, dtype=np.float32)
-        pw_arr = np.full(n_segs, np.nan, dtype=np.float32)
-        dec_arr = np.full(n_segs, np.nan, dtype=np.float32)
-        beat_arr = np.zeros(n_segs, dtype=np.float32)
-        clipped_arr = np.zeros(n_segs, dtype=np.float32)
-        snr_arr = np.zeros(n_segs, dtype=np.float32)
-
-        chunk_size = 15000
-        t0 = time.time()
-        with h5py.File(mat_path, "r") as f:
-            sig_ds = f["Subset"]["Signals"]
-            for c_start in range(0, n_segs, chunk_size):
-                c_end = min(n_segs, c_start + chunk_size)
-                ppg_block = sig_ds[:, 1, c_start:c_end]
-
-                block_res = extract_features_block(ppg_block, fs=125)
-                hr_ibi_arr[c_start:c_end] = block_res["hr_ibi"]
-                hr_arr[c_start:c_end] = block_res["hr"]
-                ibi_sd_arr[c_start:c_end] = block_res["ibi_sd"]
-                rise_arr[c_start:c_end] = block_res["systolic_rise_time"]
-                pw_arr[c_start:c_end] = block_res["pulse_width"]
-                dec_arr[c_start:c_end] = block_res["decay_ratio"]
-                beat_arr[c_start:c_end] = block_res["beat_count"]
-                clipped_arr[c_start:c_end] = block_res["is_clipped"]
-                snr_arr[c_start:c_end] = block_res["snr_ratio"]
-
-        elapsed_feat = time.time() - t0
-        print(f"Feature extraction complete in {elapsed_feat:.1f}s ({n_segs / elapsed_feat:.1f} seg/s).")
-
-        feat_df = meta_df.copy()
-        feat_df["hr_ibi"] = hr_ibi_arr
-        feat_df["hr"] = hr_arr
-        feat_df["ibi_sd"] = ibi_sd_arr
-        feat_df["systolic_rise_time"] = rise_arr
-        feat_df["pulse_width"] = pw_arr
-        feat_df["decay_ratio"] = dec_arr
-        feat_df["beat_count"] = beat_arr
-        feat_df["is_clipped"] = clipped_arr
-        feat_df["snr_ratio"] = snr_arr
+        feat_df = extract_aami_cal_features(mat_path=mat_path, meta_df=meta_df, chunk_size=15000, fs=125)
 
         # 6. Apply Frozen Imputer (Zero row drops)
-        imputer_medians = artifacts["c0_lr"]["imputer_medians"]
-        imputer = PlanCImputer()
-        imputer.medians_ = imputer_medians
-        df_imp = imputer.transform(feat_df)
+        c0_art = artifacts.get("c0_lr") or artifacts.get("C0_lr")
+        imputer_medians = c0_art["imputer_medians"] if c0_art and "imputer_medians" in c0_art else artifacts["c_imputer"].medians_
+        df_imp = impute_aami_cal_features(feat_df=feat_df, imputer_medians=imputer_medians)
 
-        # 7. Score with Frozen Models
-        print("\nScoring AAMI_Cal with frozen models...")
-        probs = {}
-        y_true = df_imp["y_120"].to_numpy(dtype=int)
+        # 7. Score with Frozen Models & Save Predictions
+        probs, pred_df = score_aami_cal_models(df_imp=df_imp, artifacts=artifacts)
 
-        for step in LADDER_STEPS:
-            # Logistic Regression
-            art_lr = artifacts[f"{step.lower()}_lr"]
-            X_lr, _ = get_feature_matrix(df_imp, step)
-            X_lr_s = art_lr["scaler"].transform(X_lr)
-            prob_lr = art_lr["model"].predict_proba(X_lr_s)[:, 1]
-            probs[f"{step}_lr"] = prob_lr
-
-            # GBT
-            art_gbt = artifacts[f"{step.lower()}_gbt"]
-            X_gbt, _ = get_feature_matrix(df_imp, step)
-            prob_gbt = art_gbt["model"].predict_proba(X_gbt)[:, 1]
-            probs[f"{step}_gbt"] = prob_gbt
+        pred_p = Path(predictions_path)
+        pred_p.parent.mkdir(parents=True, exist_ok=True)
+        pred_df.to_parquet(str(pred_p), index=False)
+        print(f"Saved per-segment predictions to {predictions_path}")
 
         # 8. Metrics & Clustered Bootstrap
         print("Computing classification metrics...")
+        y_true = df_imp["y_120"].to_numpy(dtype=int)
         metrics = {k: compute_metrics(y_true, probs[k], threshold=0.5) for k in probs}
 
         print(f"Running {n_boot:,} subject-level bootstrap resamples on AAMI_Cal...")

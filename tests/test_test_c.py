@@ -255,3 +255,65 @@ def test_aami_file_never_touched_when_any_gate_fails(tmp_path, failing_gate):
         # ASSERTION: Neither h5py.File nor load_aami_cal_metadata was EVER invoked!
         mock_h5py.assert_not_called()
         mock_load_meta.assert_not_called()
+
+
+def test_save_per_segment_predictions_output(tmp_path):
+    """Test output-only saving of per-segment predictions."""
+    import numpy as np
+    import pandas as pd
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    from src.test_c import score_aami_cal_models, LADDER_STEPS
+
+    # Build tiny synthetic imputed dataframe (5 segments, 2 subjects)
+    all_cols = [
+        "age", "sex", "bmi", "hr_ibi", "hr", "ibi_sd",
+        "systolic_rise_time", "pulse_width", "decay_ratio",
+        "beat_count", "is_clipped", "snr_ratio",
+    ]
+    data = {c: np.random.rand(5).astype(np.float32) for c in all_cols}
+    data["subject_id"] = ["p1", "p1", "p1", "p2", "p2"]
+    data["segment_idx"] = np.arange(5, dtype=np.int32)
+    data["sbp"] = np.array([115.0, 122.0, 135.0, 110.0, 128.0], dtype=np.float32)
+    data["y_120"] = (data["sbp"] >= 120.0).astype(int)
+    data["y_130"] = (data["sbp"] >= 130.0).astype(int)
+    df_imp = pd.DataFrame(data)
+
+    # Build tiny mock models dictionary matching each step's features
+    from src.features_c import get_feature_matrix
+    artifacts = {}
+    for step in LADDER_STEPS:
+        X_step, _ = get_feature_matrix(df_imp, step)
+        y_step = df_imp["y_120"].values
+
+        # Mock LR
+        lr = LogisticRegression()
+        scaler = StandardScaler()
+        X_s = scaler.fit_transform(X_step)
+        lr.fit(X_s, y_step)
+        artifacts[f"{step.lower()}_lr"] = {"model": lr, "scaler": scaler}
+
+        # Mock GBT
+        gbt = HistGradientBoostingClassifier(max_iter=5, random_state=42)
+        gbt.fit(X_step, y_step)
+        artifacts[f"{step.lower()}_gbt"] = {"model": gbt}
+
+    probs, pred_df = score_aami_cal_models(df_imp, artifacts)
+
+    assert len(pred_df) == 5
+    expected_cols = ["subject_id", "segment_idx", "sbp", "y_120", "y_130"]
+    for step in LADDER_STEPS:
+        for fam in ["lr", "gbt"]:
+            expected_cols.append(f"prob_{step}_{fam}")
+
+    for c in expected_cols:
+        assert c in pred_df.columns, f"Missing column {c} in pred_df"
+
+    # Test parquet write and read back
+    out_pq = tmp_path / "test_C_predictions.parquet"
+    pred_df.to_parquet(str(out_pq), index=False)
+    read_df = pd.read_parquet(str(out_pq))
+    assert len(read_df) == 5
+    assert list(read_df.columns) == list(pred_df.columns)
+
