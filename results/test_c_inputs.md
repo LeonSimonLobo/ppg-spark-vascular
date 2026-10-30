@@ -88,3 +88,23 @@ Because `src/test_c.py` operates directly and exclusively on `VitalDB_AAMI_Cal_S
 - Per prompt instructions: *"If test_c.py extracts in-process, skip the extraction and say so."*
 - Feature extraction via Spark into `data/features_c/aami_cal.parquet` is skipped as unneeded by the single-pass test evaluator.
 - We ingest `VitalDB_AAMI_Cal_Subset.mat` into `data/parquet/aami_cal.parquet` with `src/ingest.py` solely for dataset auditing and generating `results/aami_ingest_report.md` without modifying any test or feature extraction scripts.
+
+---
+
+## 5. Corrections & Audit Revisions
+
+Following full programmatic inspection of the MATLAB v7.3 HDF5 structures in `VitalDB_AAMI_Cal_Subset.mat` and verification against `src/ingest.py` and `src/test_c.py`, the following factual errors in the initial static audit are corrected:
+
+1. **Signals Channel Ordering:**
+   - *Initial Audit Stated:* Channel 0 = ABP, Channel 1 = PPG, Channel 2 = ECG.
+   - *Correction:* The true container layout is **Channel 0 = ECG**, **Channel 1 = PPG**, and **Channel 2 = ABP** (invasive arterial blood pressure waveform). Channel 1 remains the verified PPG channel extracted for all Study C features.
+2. **Gender Field Name and Encoding:**
+   - *Initial Audit Stated:* `Sex` exists as an array of `float32`.
+   - *Correction:* There is no `Sex` key under `f["Subset"]`. The container field is **`Gender`**, which is an array of HDF5 object references pointing to MATLAB ASCII character arrays (`'M'` or `'F'`). These are dereferenced and converted to `1.0` (Male) and `0.0` (Female) per subject.
+3. **Subject ID Format:**
+   - *Initial Audit Stated:* Subject strings look like `'p000001'`.
+   - *Correction:* Subject identifiers follow the format **`'p000238_1'`** (including subject ID and record/case suffix).
+4. **Direct Existence of SBP Field:**
+   - *Initial Audit Stated:* SBP is read from `'SBP'` or extracted via `np.max(Signals[:, 0, :], axis=0)` fallback.
+   - *Correction:* The **`SBP` dataset directly exists** for all 70,212 segments in `VitalDB_AAMI_Cal_Subset.mat` (as well as all 57,600 segments in CalFree). No max-of-waveform fallback is needed or executed. (Furthermore, ABP is Channel 2, so the fallback in the legacy loader would have read ECG peaks).
+
