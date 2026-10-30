@@ -41,3 +41,5 @@ Thumbs.db
 sources/
 
 .spark_tmp/
+
+scratch/

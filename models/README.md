@@ -27,7 +27,6 @@ python -m src.train_w
 with seed 42 on the development split.
 
 
-
 ## Study C: Frozen Cross-Subject Models (PLAN_C.md)
 **Date:** 2026-10-30
 **Cohort:** VitalDB Train development cohort (1,293 subjects, 465,480 segments, file_split == 'train_file')
