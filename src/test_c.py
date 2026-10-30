@@ -424,28 +424,18 @@ def score_aami_cal_test(
         pred_df.to_parquet(str(pred_p), index=False)
         print(f"Saved per-segment predictions to {predictions_path}")
 
-        # 8. Metrics & Clustered Bootstrap
-        print("Computing classification metrics...")
-        y_true = df_imp["y_120"].to_numpy(dtype=int)
-        metrics = {k: compute_metrics(y_true, probs[k], threshold=0.5) for k in probs}
-
-        print(f"Running {n_boot:,} subject-level bootstrap resamples on AAMI_Cal...")
-        subjs = df_imp["subject_id"].to_numpy()
-        model_cis, paired_cis = clustered_subject_bootstrap_metrics(
-            subjs, y_true, probs, threshold=0.5, n_boot=n_boot, seed=seed
-        )
-
-        # 9. Write Final Report
-        print(f"Writing final test report to {output_report}...")
-        write_aami_cal_report(
+        # Stage 2: Generate Report and Diffs CSV from predictions parquet
+        from src.report_test_c import generate_test_report
+        generate_test_report(
+            predictions_path=predictions_path,
             output_report=output_report,
-            df_imp=df_imp,
-            metrics=metrics,
-            model_cis=model_cis,
-            paired_cis=paired_cis,
-            expected_hashes=expected_hashes,
+            diffs_csv_path="results/test_C_diffs.csv",
+            dev_report_path=dev_report_path,
+            plan_path=plan_path,
+            n_boot=n_boot,
+            seed=seed,
             git_commit=git_commit,
-            plan_hash=plan_hash,
+            cohort_name="AAMI_Cal",
         )
 
         # Finalize lock status
