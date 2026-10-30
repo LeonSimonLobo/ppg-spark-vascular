@@ -15,15 +15,21 @@ No code path opens VitalDB_AAMI_Cal_Subset.mat or any AAMI parquet until ALL gat
 """
 
 import hashlib
+import os
 from pathlib import Path
 import pickle
 import re
 import subprocess
+import sys
 import time
 from typing import Dict, Any, Tuple, List, Optional
 import h5py
 import numpy as np
 import pandas as pd
+
+repo_dir = Path(__file__).resolve().parent.parent
+if str(repo_dir) not in sys.path:
+    sys.path.insert(0, str(repo_dir))
 
 from src.features_c import (
     extract_features_block,
@@ -456,4 +462,11 @@ def score_aami_cal_test(
 
 
 from src.report_test_c import write_aami_cal_report
+
+
+if __name__ == "__main__":
+    # Ensure working directory is repository root so relative paths resolve regardless of execution directory
+    os.chdir(repo_dir)
+    score_aami_cal_test()
+
 
