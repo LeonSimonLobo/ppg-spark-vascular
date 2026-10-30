@@ -540,7 +540,7 @@ def run_development_pipeline(
     print("\n" + "=" * 90)
     print("FOUR PAIRED DIFFERENCES (PRIMARY ENDPOINT, SBP >= 120 mmHg):")
     print("=" * 90)
-    print(f"{'Comparison':<16} | {'Fam':<5} | {'Paired ΔAccuracy [95% CI]':<28} | {'Paired ΔBalAcc [95% CI]':<28} | {'Paired ΔAUROC [95% CI]'}")
+    print(f"{'Comparison':<16} | {'Fam':<5} | {'Paired dAccuracy [95% CI]':<28} | {'Paired dBalAcc [95% CI]':<28} | {'Paired dAUROC [95% CI]'}")
     print("-" * 105)
     for fam in ["gbt", "lr"]:
         for comp_name in ["C1_minus_C0", "C2m_minus_C1", "C2_minus_C2m", "C2_minus_C0"]:
