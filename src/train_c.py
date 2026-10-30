@@ -63,6 +63,13 @@ def compute_metrics(
     tnr = float(np.sum(y_pred[neg_mask] == 0) / n_neg) if n_neg > 0 else 0.0
     balanced_accuracy = 0.5 * (tpr + tnr)
 
+    tp = float(np.sum((y_pred == 1) & (pos_mask)))
+    fp = float(np.sum((y_pred == 1) & (neg_mask)))
+    fn = float(np.sum((y_pred == 0) & (pos_mask)))
+    prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = float(2.0 * prec * rec / (prec + rec)) if (prec + rec) > 0 else 0.0
+
     auroc = fast_auc_with_ties(y_true, y_prob)
 
     return {
@@ -70,6 +77,7 @@ def compute_metrics(
         "majority_accuracy": majority_accuracy,
         "balanced_accuracy": balanced_accuracy,
         "auroc": auroc,
+        "f1": f1,
         "prevalence": float(np.mean(y_true)),
         "predicted_positive_rate": float(np.mean(y_pred)),
         "tpr": tpr,
@@ -146,29 +154,37 @@ def clustered_subject_bootstrap_metrics(
         # 1. Gain from Heart Rate (C1 - C0)
         if m0 in model_names and m1 in model_names:
             diff_acc_1_0 = boot_accs[m1] - boot_accs[m0]
+            diff_bal_1_0 = boot_bal_accs[m1] - boot_bal_accs[m0]
             diff_auc_1_0 = boot_aurocs[m1] - boot_aurocs[m0]
             paired_cis[f"delta_acc_{m1}_minus_{m0}"] = (float(np.percentile(diff_acc_1_0, 2.5)), float(np.percentile(diff_acc_1_0, 97.5)))
+            paired_cis[f"delta_bal_acc_{m1}_minus_{m0}"] = (float(np.percentile(diff_bal_1_0, 2.5)), float(np.percentile(diff_bal_1_0, 97.5)))
             paired_cis[f"delta_auc_{m1}_minus_{m0}"] = (float(np.percentile(diff_auc_1_0, 2.5)), float(np.percentile(diff_auc_1_0, 97.5)))
 
         # 2. Gain from Pulse Waveform Morphology Shape (C2m - C1)
         if m1 in model_names and m2m in model_names:
             diff_acc_2m_1 = boot_accs[m2m] - boot_accs[m1]
+            diff_bal_2m_1 = boot_bal_accs[m2m] - boot_bal_accs[m1]
             diff_auc_2m_1 = boot_aurocs[m2m] - boot_aurocs[m1]
             paired_cis[f"delta_acc_{m2m}_minus_{m1}"] = (float(np.percentile(diff_acc_2m_1, 2.5)), float(np.percentile(diff_acc_2m_1, 97.5)))
+            paired_cis[f"delta_bal_acc_{m2m}_minus_{m1}"] = (float(np.percentile(diff_bal_2m_1, 2.5)), float(np.percentile(diff_bal_2m_1, 97.5)))
             paired_cis[f"delta_auc_{m2m}_minus_{m1}"] = (float(np.percentile(diff_auc_2m_1, 2.5)), float(np.percentile(diff_auc_2m_1, 97.5)))
 
         # 3. Gain from Signal Quality Fields (C2 - C2m)
         if m2m in model_names and m2 in model_names:
             diff_acc_2_2m = boot_accs[m2] - boot_accs[m2m]
+            diff_bal_2_2m = boot_bal_accs[m2] - boot_bal_accs[m2m]
             diff_auc_2_2m = boot_aurocs[m2] - boot_aurocs[m2m]
             paired_cis[f"delta_acc_{m2}_minus_{m2m}"] = (float(np.percentile(diff_acc_2_2m, 2.5)), float(np.percentile(diff_acc_2_2m, 97.5)))
+            paired_cis[f"delta_bal_acc_{m2}_minus_{m2m}"] = (float(np.percentile(diff_bal_2_2m, 2.5)), float(np.percentile(diff_bal_2_2m, 97.5)))
             paired_cis[f"delta_auc_{m2}_minus_{m2m}"] = (float(np.percentile(diff_auc_2_2m, 2.5)), float(np.percentile(diff_auc_2_2m, 97.5)))
 
         # 4. Total Pipeline Gain (C2 - C0)
         if m0 in model_names and m2 in model_names:
             diff_acc_2_0 = boot_accs[m2] - boot_accs[m0]
+            diff_bal_2_0 = boot_bal_accs[m2] - boot_bal_accs[m0]
             diff_auc_2_0 = boot_aurocs[m2] - boot_aurocs[m0]
             paired_cis[f"delta_acc_{m2}_minus_{m0}"] = (float(np.percentile(diff_acc_2_0, 2.5)), float(np.percentile(diff_acc_2_0, 97.5)))
+            paired_cis[f"delta_bal_acc_{m2}_minus_{m0}"] = (float(np.percentile(diff_bal_2_0, 2.5)), float(np.percentile(diff_bal_2_0, 97.5)))
             paired_cis[f"delta_auc_{m2}_minus_{m0}"] = (float(np.percentile(diff_auc_2_0, 2.5)), float(np.percentile(diff_auc_2_0, 97.5)))
 
     return per_model_cis, paired_cis
@@ -279,10 +295,20 @@ def train_and_eval_cv(
             prob_gbt = gbt.predict_proba(X_val)[:, 1]
             oof_probs[f"{step}_gbt"][val_idx] = prob_gbt.astype(np.float32)
 
-            fold_record[f"{step}_lr_acc"] = float(np.mean((prob_lr >= 0.5) == y_val))
-            fold_record[f"{step}_lr_auc"] = fast_auc_with_ties(y_val, prob_lr)
-            fold_record[f"{step}_gbt_acc"] = float(np.mean((prob_gbt >= 0.5) == y_val))
-            fold_record[f"{step}_gbt_auc"] = fast_auc_with_ties(y_val, prob_gbt)
+            m_lr = compute_metrics(y_val, prob_lr, threshold=0.5)
+            m_gbt = compute_metrics(y_val, prob_gbt, threshold=0.5)
+
+            fold_record[f"{step}_lr_acc"] = m_lr["accuracy"]
+            fold_record[f"{step}_lr_auc"] = m_lr["auroc"]
+            fold_record[f"{step}_lr_bal_acc"] = m_lr["balanced_accuracy"]
+            fold_record[f"{step}_lr_f1"] = m_lr["f1"]
+            fold_record[f"{step}_lr_majority"] = m_lr["majority_accuracy"]
+
+            fold_record[f"{step}_gbt_acc"] = m_gbt["accuracy"]
+            fold_record[f"{step}_gbt_auc"] = m_gbt["auroc"]
+            fold_record[f"{step}_gbt_bal_acc"] = m_gbt["balanced_accuracy"]
+            fold_record[f"{step}_gbt_f1"] = m_gbt["f1"]
+            fold_record[f"{step}_gbt_majority"] = m_gbt["majority_accuracy"]
 
         elapsed = time.time() - t_fold
         print(f"Fold {fold_idx + 1}/{n_splits} complete in {elapsed:.1f}s ({len(val_subjs)} validation subjects).")
@@ -320,8 +346,12 @@ def fit_and_freeze_full_models(
     imputer_path = out_dir / "c_imputer_frozen.pkl"
     with open(imputer_path, "wb") as f:
         pickle.dump(imputer, f)
+    sha_imp = hashlib.sha256(imputer_path.read_bytes()).hexdigest()
 
-    frozen_dict = {}
+    frozen_dict = {
+        "c_imputer": (str(imputer_path), sha_imp)
+    }
+    print(f"Frozen c_imputer: {imputer_path} (SHA-256: {sha_imp})")
 
     for step in LADDER_STEPS:
         X_full, feat_names = get_feature_matrix(df_imp, step)
@@ -387,14 +417,20 @@ def evaluate_on_calfree(
     seed: int = 42,
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, Dict[str, float]], Dict[str, Any], Dict[str, Any]]:
     """Evaluate frozen models on CalFree extra validation cohort without refitting."""
-    sample_key = list(frozen_models_dict.keys())[0]
-    sample_path = frozen_models_dict[sample_key][0]
-    with open(sample_path, "rb") as f:
-        art = pickle.load(f)
-    medians = art["imputer_medians"]
+    # 1. Load imputer explicitly from frozen_models_dict["c_imputer"]
+    if "c_imputer" in frozen_models_dict:
+        imputer_path = frozen_models_dict["c_imputer"][0]
+        with open(imputer_path, "rb") as f:
+            imputer = pickle.load(f)
+    else:
+        # Fallback if imputer was not frozen separately
+        sample_key = [k for k in frozen_models_dict.keys() if k != "c_imputer"][0]
+        sample_path = frozen_models_dict[sample_key][0]
+        with open(sample_path, "rb") as f:
+            art = pickle.load(f)
+        imputer = PlanCImputer()
+        imputer.medians_ = art["imputer_medians"]
 
-    imputer = PlanCImputer()
-    imputer.medians_ = medians
     df_cf_imp = imputer.transform(calfree_df)
 
     y_cf = calfree_df[target_col].to_numpy(dtype=int)
@@ -402,19 +438,23 @@ def evaluate_on_calfree(
 
     for step in LADDER_STEPS:
         # Evaluate LR
-        lr_path = frozen_models_dict[f"{step}_lr"][0]
-        with open(lr_path, "rb") as f:
-            art_lr = pickle.load(f)
-        X_lr, _ = get_feature_matrix(df_cf_imp, step)
-        X_lr_s = art_lr["scaler"].transform(X_lr)
-        probs[f"{step}_lr"] = art_lr["model"].predict_proba(X_lr_s)[:, 1]
+        lr_key = f"{step}_lr"
+        if lr_key in frozen_models_dict:
+            lr_path = frozen_models_dict[lr_key][0]
+            with open(lr_path, "rb") as f:
+                art_lr = pickle.load(f)
+            X_lr, _ = get_feature_matrix(df_cf_imp, step)
+            X_lr_s = art_lr["scaler"].transform(X_lr)
+            probs[lr_key] = art_lr["model"].predict_proba(X_lr_s)[:, 1]
 
         # Evaluate GBT
-        gbt_path = frozen_models_dict[f"{step}_gbt"][0]
-        with open(gbt_path, "rb") as f:
-            art_gbt = pickle.load(f)
-        X_gbt, _ = get_feature_matrix(df_cf_imp, step)
-        probs[f"{step}_gbt"] = art_gbt["model"].predict_proba(X_gbt)[:, 1]
+        gbt_key = f"{step}_gbt"
+        if gbt_key in frozen_models_dict:
+            gbt_path = frozen_models_dict[gbt_key][0]
+            with open(gbt_path, "rb") as f:
+                art_gbt = pickle.load(f)
+            X_gbt, _ = get_feature_matrix(df_cf_imp, step)
+            probs[gbt_key] = art_gbt["model"].predict_proba(X_gbt)[:, 1]
 
     # Compute metrics
     cf_metrics = {k: compute_metrics(y_cf, probs[k], threshold=0.5) for k in probs}

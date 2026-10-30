@@ -9,6 +9,7 @@ from src.train_c import (
     clustered_subject_bootstrap_metrics,
     train_and_eval_cv,
     fit_and_freeze_full_models,
+    evaluate_on_calfree,
 )
 
 
@@ -139,5 +140,29 @@ def test_cv_and_freezing(tmp_path):
     assert "C2m_lr" in frozen_dict
     assert "C2m_gbt" in frozen_dict
     assert "C2_gbt" in frozen_dict
+    assert "c_imputer" in frozen_dict
     path, sha = frozen_dict["C2_gbt"]
     assert len(sha) == 64
+
+
+def test_evaluate_on_calfree_with_frozen_dict(tmp_path):
+    """Test evaluate_on_calfree loading frozen dictionary containing 'c_imputer' and model artifacts."""
+    train_df = create_synthetic_cohort(n_subjs=10, segs_per_subj=10, seed=42)
+    calfree_df = create_synthetic_cohort(n_subjs=6, segs_per_subj=10, seed=123)
+
+    frozen_dict = fit_and_freeze_full_models(
+        train_df, target_col="y_120", models_dir=str(tmp_path), seed=42
+    )
+
+    assert "c_imputer" in frozen_dict
+
+    # Evaluate on synthetic calfree cohort
+    probs, cf_metrics, cf_model_cis, cf_paired_cis = evaluate_on_calfree(
+        calfree_df, frozen_dict, target_col="y_120", seed=42
+    )
+
+    assert len(probs) == 8  # 4 steps x 2 model families
+    assert "C0_lr" in cf_metrics
+    assert "C2_gbt" in cf_metrics
+    assert 0.0 <= cf_metrics["C2_gbt"]["accuracy"] <= 1.0
+    assert "delta_acc_C2_gbt_minus_C0_gbt" in cf_paired_cis

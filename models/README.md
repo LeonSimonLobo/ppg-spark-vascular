@@ -25,3 +25,23 @@ The frozen models are deterministically produced by running:
 python -m src.train_w
 ```
 with seed 42 on the development split.
+
+
+
+## Study C: Frozen Cross-Subject Models (PLAN_C.md)
+**Date:** 2026-10-30
+**Cohort:** VitalDB Train development cohort (1,293 subjects, 465,480 segments, file_split == 'train_file')
+**Target:** SBP >= 120 mmHg (Primary endpoint)
+**Pre-registration:** `PLAN_C.md` (committed before AAMI_Cal access)
+
+| Artifact Key | Path | SHA-256 Digest |
+|---|---|---|
+| **`c_imputer`** | `models\c_imputer_frozen.pkl` | `d0a8e3d67cad417d1115f6b957ccd0ba901e1ac378e78eeec06b7df8d16bd641` |
+| **`C0_lr`** | `models\c0_lr_frozen.pkl` | `02490af84b823d77cfb05e416ea74982ad577cbb425cf1ebf38b532f5e7dd4b3` |
+| **`C0_gbt`** | `models\c0_gbt_frozen.pkl` | `fd5d7d29b0b18a592370d9d9885a5ed824efb5bfbdca043dc5e64cf907068af3` |
+| **`C1_lr`** | `models\c1_lr_frozen.pkl` | `74012839bdd119f60619aee8c8ea07997125bb78eb2cf89e8556a22da948b0c5` |
+| **`C1_gbt`** | `models\c1_gbt_frozen.pkl` | `0ddc345f04e8aba38da90bbac8afaf26ce02c48bdeea78082a888931f840feb9` |
+| **`C2m_lr`** | `models\c2m_lr_frozen.pkl` | `c7032cc9204ad4225af592588d2334df1d94dd9bd9ba5f351876530d52c755d9` |
+| **`C2m_gbt`** | `models\c2m_gbt_frozen.pkl` | `2869f2b83975e5335573904bb8c1a2fb5b412bbf3896537656c25da04265b54a` |
+| **`C2_lr`** | `models\c2_lr_frozen.pkl` | `4def87939d3e73fdbfb28a2f0f94e669423c25a1f7d0fd2e7e1e0d5ddeb8fa8a` |
+| **`C2_gbt`** | `models\c2_gbt_frozen.pkl` | `8a6e9e1aea7c552455e4a9d1fa1b0883ceaab71a9ace1be018f8bc36af4f649f` |
