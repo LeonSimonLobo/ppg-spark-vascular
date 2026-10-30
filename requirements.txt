@@ -9,3 +9,4 @@ pyspark
 shap
 pytest
 pyyaml
+psutil
